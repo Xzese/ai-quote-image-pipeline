@@ -3,7 +3,7 @@ import json
 import os
 
 endpoint_url = "https://api.quotable.io/quotes"
-file_path = "output.json"
+file_path = "output/quotes2.json"
 quote_list = []
 total_pages = 1
 current_page = 1
