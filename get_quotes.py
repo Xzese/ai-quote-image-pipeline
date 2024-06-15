@@ -1,9 +1,12 @@
 import requests
 import json
+import dotenv
 import os
 
+dotenv.load_dotenv()
+
 endpoint_url = "https://api.quotable.io/quotes"
-file_path = "output/quotes2.json"
+quotes_file_path = os.getenv('QUOTES_FILE_PATH')
 quote_list = []
 total_pages = 1
 current_page = 1
@@ -23,5 +26,5 @@ while current_page <= total_pages:
     else:
         print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
 
-with open(file_path, 'w') as json_file:
+with open(quotes_file_path, 'w') as json_file:
     json.dump(quote_list, json_file, indent=4)
