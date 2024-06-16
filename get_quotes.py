@@ -11,11 +11,11 @@ quote_list = []
 total_pages = 1
 current_page = 1
 
-params = {
-    "limit": 150
-}
-
 while current_page <= total_pages:
+    params = {
+        "limit": 150,
+        "page":current_page
+    }
     print("Page Number: " + str(current_page))
     response = requests.get(endpoint_url, params=params)
     if response.status_code == 200:
