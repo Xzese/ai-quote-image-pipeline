@@ -4,7 +4,6 @@ import os
 import requests
 import io
 import base64
-import math
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
