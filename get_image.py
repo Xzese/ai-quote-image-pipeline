@@ -4,7 +4,8 @@ import os
 import requests
 import io
 import base64
-from textwrap import fill
+import math
+import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
 def overlay_text_on_image(image_path, output_path, quote, author):
@@ -13,46 +14,49 @@ def overlay_text_on_image(image_path, output_path, quote, author):
         image = Image.open(image_path)
         draw = ImageDraw.Draw(image)
         image_width, image_height = image.size
-
+        font_size = 48
         # Load font
-        font = ImageFont.truetype("GreatVibes-Regular.ttf", 10, encoding="unic")  # Start with a small font size
+        font = ImageFont.truetype("GreatVibes-Regular.ttf", font_size, encoding="unicode")
 
         # Wrap text
         max_width = int(0.8 * image_width)
-        wrapped_text = fill(quote, width=max_width // (font.getlength(" ")[0] + 1))
+        wrapped_text = textwrap.fill(quote, width=(len(quote) / math.ceil(font.getlength(quote) / max_width)))
+        #wrapped_text = textwrap.fill(quote, width=30)
+        wrapped_text_list = textwrap.wrap(quote, width=(len(quote) / math.ceil(font.getlength(quote) / max_width)))
 
         # Incrementally increase font size until the wrapped text fits within the specified width
-        while True:
+        '''while True: 
             font_size = font.size[1]
             text_width, text_height = draw.textlength(wrapped_text, font=font)
             if text_width <= max_width:
                 break
-            font = ImageFont.truetype("GreatVibes-Regular.ttf", font_size + 1)
+            font = ImageFont.truetype("GreatVibes-Regular.ttf", font_size + 1)'''
+        print(wrapped_text)
+        print(wrapped_text_list)
+        
+        text_bound = draw.textbbox((0,0),wrapped_text,font=font)
+        text_width = text_bound[2] - text_bound[0]
+        text_height = text_bound[3] - text_bound[1]
 
         # Calculate text position
         text_x = (image_width - text_width) / 2
-        text_y = (image_height - text_height) / 2
+        text_y = 40
         text_color = (255, 255, 255)
         # Draw text on image
         draw.text((text_x, text_y), wrapped_text, font=font, fill=text_color)
 
+        while font.getlength(author) > max_width * 0.8:
+            font_size -= 1
+            font = ImageFont.truetype("GreatVibes-Regular.ttf", font_size)
+
+        draw.text((max_width*1.1 - font.getlength(author), text_y + text_height + 25), "—" + author, font=font, fill=text_color)
+        print("-" + author)
         # Save the image with overlaid text
         image.save(output_path)
         return True
     except Exception as e:
         print(f"Error overlaying text on image: {e}")
         return False
-    '''
-    text_position = (50,50)
-    border_color = (0, 0, 0)      # Black Color
-
-    x, y = text_position
-    offsets = [-1,0,1]
-    for offset_x in offsets:
-        for offset_y in offsets:
-            draw.text((x + offset_x, y + offset_y), quote, font=font, fill=border_color)
-    draw.text(text_position, quote, font=font, fill=text_color)
-    '''
 
 dotenv.load_dotenv()
 
@@ -68,6 +72,7 @@ height = 512
 for x in range(len(quote_data)):
     try:
         if 'prompt' in quote_data[x] and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png"):
+            continue
             payload = {
                 "prompt": quote_data[x]['prompt'] + " Must have a positive, high energy atmosphere.",
                 "steps": 30,
