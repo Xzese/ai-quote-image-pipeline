@@ -38,7 +38,7 @@ with open(quotes_file_path, 'r') as json_file:
 width = 512
 height = 512
 
-for x in range(1):#range(len(quote_data)):
+for x in range(len(quote_data)):
     try:
         if 'prompt' in quote_data[x] and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png"):
             payload = {
@@ -61,8 +61,9 @@ for x in range(1):#range(len(quote_data)):
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
         elif not os.path.isfile("output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png") and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png"):
-            overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", quote_data[x]['content'], quote_data[x]['author'])
-            print("Added Overlay for quote "+ str(x))
+            continue
+            #overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+            #print("Added Overlay for quote "+ str(x))
     except Exception as error:
         print(f"An error occured with item {x}: {error}")
         continue
