@@ -62,7 +62,7 @@ def overlay_text_on_image(image_path, output_path, quote, author):
             author_font_size -= 1
             font = ImageFont.truetype(font_file, author_font_size)
 
-        text_x = max_width - font.getlength("—" + author)
+        text_x = image_width * 0.9 - font.getlength("—" + author)
         text_y = text_y + text_height + 25
 
         for offset_x in offsets:
