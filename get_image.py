@@ -20,9 +20,14 @@ def overlay_text_on_image(image_path, output_path, quote, author):
 
         # Wrap text
         max_width = int(0.8 * image_width)
-        wrapped_text = textwrap.fill(quote, width=(len(quote) / math.ceil(font.getlength(quote) / max_width)))
-        #wrapped_text = textwrap.fill(quote, width=30)
-        wrapped_text_list = textwrap.wrap(quote, width=(len(quote) / math.ceil(font.getlength(quote) / max_width)))
+        # Work out initial char width
+        char_width = len(quote) / math.ceil(font.getlength(quote) / max_width)
+        wrapped_text_list = textwrap.wrap(quote, width=char_width)
+
+        # Work out updated char width based on first line accuracy
+        char_width = (max_width / max(font.getlength(line) for line in wrapped_text_list)) * char_width
+        wrapped_text_list = textwrap.wrap(quote, width=char_width)
+        wrapped_text = textwrap.fill(quote, width=char_width)
 
         # Incrementally increase font size until the wrapped text fits within the specified width
         '''while True: 
@@ -40,16 +45,16 @@ def overlay_text_on_image(image_path, output_path, quote, author):
 
         # Calculate text position
         text_x = (image_width - text_width) / 2
-        text_y = 40
+        text_y = ((image_width - text_height) / 2) - 40
         text_color = (255, 255, 255)
         # Draw text on image
         draw.text((text_x, text_y), wrapped_text, font=font, fill=text_color)
 
-        while font.getlength(author) > max_width * 0.8:
+        while font.getlength("—" + author) > max_width * 0.8:
             font_size -= 1
             font = ImageFont.truetype("GreatVibes-Regular.ttf", font_size)
 
-        draw.text((max_width*1.1 - font.getlength(author), text_y + text_height + 25), "—" + author, font=font, fill=text_color)
+        draw.text((max_width*1.1 - font.getlength("—" + author), text_y + text_height + 25), "—" + author, font=font, fill=text_color)
         print("-" + author)
         # Save the image with overlaid text
         image.save(output_path)
