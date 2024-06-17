@@ -1,7 +1,6 @@
 import json
 import dotenv
 import os
-import requests
 from transformers import AutoTokenizer
 from openai import OpenAI
 
@@ -13,9 +12,6 @@ client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
 
 with open(quotes_file_path, 'r') as json_file:
     quote_data = json.load(json_file)
-
-with open("output/quotes.json.backup", 'r') as old_json_file:
-    old_quote_data = json.load(old_json_file)
 
 for x in range(len(quote_data)):
     prompt_accepted = False
