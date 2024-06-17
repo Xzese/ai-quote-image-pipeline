@@ -16,15 +16,15 @@ def overlay_text_on_image(image_path, output_path, quote, author):
         draw = ImageDraw.Draw(image)
         image_width, image_height = image.size
 
-        font_size = 48
-        author_font_size = 54
+        font_size = 72
+        author_font_size = 72
 
         while text_size_accepted == False:
             # Load font
             font = ImageFont.truetype(font_file, font_size, encoding="unicode")
 
             # Wrap text
-            max_width = int(0.75 * image_width)
+            max_width = int(0.82 * image_width)
             # Work out initial char width
             char_width = len(quote) / (font.getlength(quote) / max_width)
             wrapped_text_list = textwrap.wrap(quote, width=char_width)
@@ -44,7 +44,7 @@ def overlay_text_on_image(image_path, output_path, quote, author):
 
         text_color = (255, 255, 255)
         outline_color = (0, 0, 0)
-        offsets = [-1,0,1]
+        offsets = [-2,0,2]
 
         # Calculate text position
         text_x = (image_width - text_width) / 2
@@ -97,7 +97,7 @@ for x in range(len(quote_data)):
                 "width": width,
                 "height": height,
                 "cfg_scale": 12,
-                "seed": -1
+                "seed": -1,
             }
             print("Generating for quote " + str(x))
             response = requests.post(endpoint_url + "sdapi/v1/txt2img", json=payload)
@@ -108,6 +108,27 @@ for x in range(len(quote_data)):
                 image = Image.open(image_data)
                 image.save("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png")
                 print("Image Generated for quote " + str(x))
+                payload = {
+                    "upscaling_resize": 2,
+                    "upscaler_1": "R-ESRGAN 4x+",
+                    "image": image_base64
+                }
+                print("Upscaling for quote " + str(x))
+                response = requests.post(endpoint_url + "sdapi/v1/extra-single-image", json=payload)
+                if response.status_code == 200:
+                    image_base64 = response.json()['image']
+                    image_binary = base64.b64decode(image_base64)
+                    image_data = io.BytesIO(image_binary) 
+                    image = Image.open(image_data)
+                    image.save("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")
+                    print("Image Generated for quote " + str(x))
+                    image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+                    if image_overlay:
+                        print("Added overlay for quote "+ str(x))
+                    else:
+                        print("Failed to add overlay for quote "+ str(x))
+                else:
+                    print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
                 image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", quote_data[x]['content'], quote_data[x]['author'])
                 if image_overlay:
                     print("Added overlay for quote "+ str(x))
@@ -115,8 +136,34 @@ for x in range(len(quote_data)):
                     print("Failed to add overlay for quote "+ str(x))
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
-        elif not os.path.isfile("output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png") and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png"):
-            image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+        elif 'prompt' in quote_data[x] and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png") and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
+            image = Image.open("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png")
+            buffered = io.BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            payload = {
+                "upscaling_resize": 2,
+                "upscaler_1": "R-ESRGAN 4x+",
+                "image": img_str
+            }
+            print("Upscaling for quote " + str(x))
+            response = requests.post(endpoint_url + "sdapi/v1/extra-single-image", json=payload)
+            if response.status_code == 200:
+                image_base64 = response.json()['image']
+                image_binary = base64.b64decode(image_base64)
+                image_data = io.BytesIO(image_binary) 
+                image = Image.open(image_data)
+                image.save("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")
+                print("Image Generated for quote " + str(x))
+                image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+                if image_overlay:
+                    print("Added overlay for quote "+ str(x))
+                else:
+                    print("Failed to add overlay for quote "+ str(x))
+            else:
+                print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
+        elif not os.path.isfile("output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png") and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
+            image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", quote_data[x]['content'], quote_data[x]['author'])
             if image_overlay:
                 print("Added overlay for quote "+ str(x))
             else:
