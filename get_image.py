@@ -129,11 +129,6 @@ for x in range(len(quote_data)):
                         print("Failed to add overlay for quote "+ str(x))
                 else:
                     print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
-                image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png", quote_data[x]['content'], quote_data[x]['author'])
-                if image_overlay:
-                    print("Added overlay for quote "+ str(x))
-                else:
-                    print("Failed to add overlay for quote "+ str(x))
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
         elif 'prompt' in quote_data[x] and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png") and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
