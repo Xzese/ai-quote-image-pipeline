@@ -90,7 +90,7 @@ height = 512
 
 for x in range(len(quote_data)):
     try:
-        if 'prompt' in quote_data[x] and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png"):
+        if 'prompt' in quote_data[x] and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
             payload = {
                 "prompt": quote_data[x]['prompt'] + " Must have a positive, high energy atmosphere.",
                 "steps": 30,
@@ -103,10 +103,6 @@ for x in range(len(quote_data)):
             response = requests.post(endpoint_url + "sdapi/v1/txt2img", json=payload)
             if response.status_code == 200:
                 image_base64 = response.json()['images'][0]
-                image_binary = base64.b64decode(image_base64)
-                image_data = io.BytesIO(image_binary) 
-                image = Image.open(image_data)
-                image.save("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png")
                 print("Image Generated for quote " + str(x))
                 payload = {
                     "upscaling_resize": 2,
