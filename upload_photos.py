@@ -3,8 +3,11 @@ import os
 import requests
 import dotenv
 import datetime
+import json
+import random
 
 dotenv.load_dotenv()
+quotes_file_path = os.getenv('QUOTES_FILE_PATH')
 
 def business_id_check():
     #get Business Account ID if missing
@@ -45,11 +48,10 @@ def create_media_container(image_url, caption):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
-            print(response.json())
-            return response.json()
+            return response.json()['id']
         else:
             # Print the error message if the request was not successful
-            print("Error Update IG Stats:", response.text)
+            print("Error Creating Media Container:", response.text)
             return None
     else:
         return "No Valid Token"
@@ -73,9 +75,54 @@ def publish_media_container(creation_id):
             print(response.json())
         else:
             # Print the error message if the request was not successful
-            print("Error Update IG Stats:", response.text)
+            print("Error publishing media container:", response.text)
             return None
 
         return "IG Stats Updated Successfully"
     else:
         return "No Valid Token"
+    
+def upload_to_imgbb(image_path):
+    if os.getenv('IMGBB_API_KEY') is not None and os.getenv('IMGBB_API_KEY') != '':
+
+        with open(image_path, 'rb') as image_file:
+            binary_data = image_file.read()
+        
+        endpoint_url = 'https://api.imgbb.com/1/upload'
+
+        params = {
+            'key': os.getenv('IMGBB_API_KEY'),
+            'expiration':300
+        }
+
+        form_data = {
+            'image': binary_data
+        }
+        # Send a GET request to the endpoint URL with the parameters
+        response = requests.post(endpoint_url, params=params, files=form_data)
+        
+        # Check if the request was successful (status code 200)
+        if response.status_code == 200:
+            return response.json()['data']['image']['url']
+        else:
+            # Print the error message if the request was not successful
+            print("Error Uploading Image: ", response.text)
+            return None
+    else:
+        return "No Valid IMGBB API Key"
+
+with open(quotes_file_path, 'r') as json_file:
+    quote_data = json.load(json_file)
+
+quote_choice = random.randint(0,len(quote_data))
+file_path = "output/images_text_overlay/"+quote_data[quote_choice]['_id']+"1024x1024.jpeg"
+if os.path.isfile(file_path) and 'post_count' not in quote_data[quote_choice]:
+    upload_url = upload_to_imgbb(file_path)
+    container_id = create_media_container(upload_url, quote_data[quote_choice]['hashtags'])
+    publish_media_container(container_id)
+    quote_data[quote_choice]['post_count'] = '1'
+else:
+    print("Fail")
+
+with open(quotes_file_path, 'w') as json_file:
+    json.dump(quote_data, json_file)
