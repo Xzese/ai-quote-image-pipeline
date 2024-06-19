@@ -7,6 +7,22 @@ import base64
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
+def convert_png_to_jpg(png_image_path, jpg_image_path, quality=90):
+    # Open the PNG image
+    image = Image.open(png_image_path)
+    
+    # Convert the image mode to 'RGB' if the PNG has an alpha channel (transparency)
+    if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+        # Create a white background image
+        background = Image.new('RGB', image.size, (255, 255, 255))
+        background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
+        image = background
+    else:
+        image = image.convert('RGB')
+    # Save the image as a JPEG file
+    image.save(jpg_image_path, 'JPEG', quality=quality)
+    print("Image converted to JPEG")
+
 def overlay_text_on_image(image_path, output_path, quote, author):
     try:
         text_size_accepted = False
@@ -71,7 +87,18 @@ def overlay_text_on_image(image_path, output_path, quote, author):
 
         draw.text((text_x, text_y), "—" + author, font=font, fill=text_color)
         # Save the image with overlaid text
-        image.save(output_path)
+
+         # Convert the image mode to 'RGB' if the PNG has an alpha channel (transparency)
+        if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+            # Create a white background image
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
+            image = background
+        else:
+            image = image.convert('RGB')
+
+        # Save the image as a JPEG file
+        image.save(output_path,'JPEG', quality=90)
         return True
     except Exception as e:
         print(f"Error overlaying text on image: {e}")
@@ -118,7 +145,7 @@ for x in range(len(quote_data)):
                     image = Image.open(image_data)
                     image.save("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")
                     print("Image Generated for quote " + str(x))
-                    image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+                    image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg", quote_data[x]['content'], quote_data[x]['author'])
                     if image_overlay:
                         print("Added overlay for quote "+ str(x))
                     else:
@@ -146,15 +173,15 @@ for x in range(len(quote_data)):
                 image = Image.open(image_data)
                 image.save("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")
                 print("Image Generated for quote " + str(x))
-                image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+                image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg", quote_data[x]['content'], quote_data[x]['author'])
                 if image_overlay:
                     print("Added overlay for quote "+ str(x))
                 else:
                     print("Failed to add overlay for quote "+ str(x))
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
-        elif not os.path.isfile("output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png") and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
-            image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", quote_data[x]['content'], quote_data[x]['author'])
+        elif not os.path.isfile("output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg") and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
+            image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg", quote_data[x]['content'], quote_data[x]['author'])
             if image_overlay:
                 print("Added overlay for quote "+ str(x))
             else:
