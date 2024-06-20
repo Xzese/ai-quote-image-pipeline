@@ -7,7 +7,6 @@ import json
 import random
 
 dotenv.load_dotenv()
-quotes_file_path = os.getenv('QUOTES_FILE_PATH')
 
 def business_id_check():
     #get Business Account ID if missing
@@ -72,13 +71,11 @@ def publish_media_container(creation_id):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
-            print(response.json())
+            return response.json()
         else:
             # Print the error message if the request was not successful
             print("Error publishing media container:", response.text)
             return None
-
-        return "IG Stats Updated Successfully"
     else:
         return "No Valid Token"
     
@@ -111,18 +108,23 @@ def upload_to_imgbb(image_path):
     else:
         return "No Valid IMGBB API Key"
 
-with open(quotes_file_path, 'r') as json_file:
-    quote_data = json.load(json_file)
+def post_random_photo():
+    quotes_file_path = os.getenv('QUOTES_FILE_PATH')
+    with open(quotes_file_path, 'r') as json_file:
+        quote_data = json.load(json_file)
+    while True:
+        quote_choice = random.randint(0,len(quote_data))
+        file_path = "output/images_text_overlay/"+quote_data[quote_choice]['_id']+"1024x1024.jpeg"
+        if os.path.isfile(file_path) and 'post_count' not in quote_data[quote_choice]:
+            upload_url = upload_to_imgbb(file_path)
+            container_id = create_media_container(upload_url, quote_data[quote_choice]['hashtags'])
+            publish_media_container(container_id)
+            quote_data[quote_choice]['post_count'] = '1'
+            print("Posted image ID: "+ quote_data[quote_choice]['_id'])
+            break
+        else:
+            print("Image already posted")
+    with open(quotes_file_path, 'w') as json_file:
+        json.dump(quote_data, json_file)
 
-quote_choice = random.randint(0,len(quote_data))
-file_path = "output/images_text_overlay/"+quote_data[quote_choice]['_id']+"1024x1024.jpeg"
-if os.path.isfile(file_path) and 'post_count' not in quote_data[quote_choice]:
-    upload_url = upload_to_imgbb(file_path)
-    container_id = create_media_container(upload_url, quote_data[quote_choice]['hashtags'])
-    publish_media_container(container_id)
-    quote_data[quote_choice]['post_count'] = '1'
-else:
-    print("Fail")
-
-with open(quotes_file_path, 'w') as json_file:
-    json.dump(quote_data, json_file)
+post_random_photo()
