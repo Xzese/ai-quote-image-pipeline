@@ -6,6 +6,7 @@ import datetime
 import json
 import random
 import datetime
+import time
 
 dotenv.load_dotenv()
 
@@ -13,7 +14,6 @@ def add_to_log(message):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(os.getenv('LOG_FILE'), 'a') as f:
         f.write(f'[{timestamp}] {message}\n')
-
 
 def business_id_check():
     #get Business Account ID if missing
@@ -152,3 +152,6 @@ def post_random_photo():
         json.dump(quote_data, json_file)
 
 post_random_photo()
+
+while True:
+    time.sleep(86400)
