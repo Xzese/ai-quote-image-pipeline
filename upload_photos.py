@@ -5,8 +5,15 @@ import dotenv
 import datetime
 import json
 import random
+import datetime
 
 dotenv.load_dotenv()
+
+def add_to_log(message):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(os.getenv('LOG_FILE'), 'a') as f:
+        f.write(f'[{timestamp}] {message}\n')
+
 
 def business_id_check():
     #get Business Account ID if missing
@@ -28,12 +35,14 @@ def business_id_check():
         else:
             # Print the error message if the request was not successful
             print("Error Update User ID:", response.text)
+            add_to_log("Error Update User ID:" + response.text)
             return False
 
 def create_media_container(image_url, caption):
     if len(os.getenv('IG_BUSINESS_USER_ID')) == 0:
         if not business_id_check():
             print("No Valid Business ID")
+            add_to_log("No Valid Business ID")
             return
     if os.getenv('ACCESS_TOKEN') is not None and os.getenv('ACCESS_TOKEN') != '' and os.getenv('ACCESS_TOKEN_EXPIRY') is not None and os.getenv('ACCESS_TOKEN_EXPIRY') != '' and datetime.datetime.strptime(os.getenv('ACCESS_TOKEN_EXPIRY'), '%Y-%m-%d %H:%M:%S.%f') > datetime.datetime.now():
         endpoint_url = 'https://graph.facebook.com/v20.0/' + os.getenv('IG_BUSINESS_USER_ID') + '/media'
@@ -48,9 +57,11 @@ def create_media_container(image_url, caption):
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
             print("Created media container: " + response.json()['id'])
+            add_to_log("Created media container: " + response.json()['id'])
             return response.json()['id']
         else:
             # Print the error message if the request was not successful
+            add_to_log("Error Creating Media Container:" + response.text)
             print("Error Creating Media Container:", response.text)
             return None
     else:
@@ -59,6 +70,7 @@ def create_media_container(image_url, caption):
 def publish_media_container(creation_id):
     if len(os.getenv('IG_BUSINESS_USER_ID')) == 0:
         if not business_id_check():
+            add_to_log("No Valid Business ID")
             print("No Valid Business ID")
             return
     if os.getenv('ACCESS_TOKEN') is not None and os.getenv('ACCESS_TOKEN') != '' and os.getenv('ACCESS_TOKEN_EXPIRY') is not None and os.getenv('ACCESS_TOKEN_EXPIRY') != '' and datetime.datetime.strptime(os.getenv('ACCESS_TOKEN_EXPIRY'), '%Y-%m-%d %H:%M:%S.%f') > datetime.datetime.now():
@@ -72,10 +84,12 @@ def publish_media_container(creation_id):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
+            add_to_log("Published media container: " + creation_id)
             print("Published media container: " + creation_id)
             return response.json()
         else:
             # Print the error message if the request was not successful
+            add_to_log("Error publishing media container:" + response.text)
             print("Error publishing media container:", response.text)
             return None
     else:
@@ -102,10 +116,12 @@ def upload_to_imgbb(image_path):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
+            add_to_log("Uploaded image to imgbb: " + image_path)
             print("Uploaded image to imgbb: " + image_path)
             return response.json()['data']['image']['url']
         else:
             # Print the error message if the request was not successful
+            add_to_log("Error Uploading Image: " + response.text)
             print("Error Uploading Image: ", response.text)
             return None
     else:
@@ -126,9 +142,11 @@ def post_random_photo():
                 quote_data[quote_choice]['post_count'] = '1'
             else:
                 quote_data[quote_choice]['post_count'] = str(int(quote_data[quote_choice]['post_count'])+1)
+            add_to_log("Posted image ID: "+ quote_data[quote_choice]['_id'])
             print("Posted image ID: "+ quote_data[quote_choice]['_id'])
             break
         else:
+            add_to_log("Image file path not valid: " + file_path)
             print("Image file path not valid: " + file_path)
     with open(quotes_file_path, 'w') as json_file:
         json.dump(quote_data, json_file)
