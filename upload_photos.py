@@ -153,5 +153,4 @@ def post_random_photo():
 
 post_random_photo()
 
-while True:
-    time.sleep(86400)
+time.sleep(60*60*3)
