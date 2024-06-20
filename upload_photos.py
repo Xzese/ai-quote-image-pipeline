@@ -47,6 +47,7 @@ def create_media_container(image_url, caption):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
+            print("Created media container: " + response.json()['id'])
             return response.json()['id']
         else:
             # Print the error message if the request was not successful
@@ -71,6 +72,7 @@ def publish_media_container(creation_id):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
+            print("Published media container: " + creation_id)
             return response.json()
         else:
             # Print the error message if the request was not successful
@@ -100,6 +102,7 @@ def upload_to_imgbb(image_path):
         
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
+            print("Uploaded image to imgbb: " + image_path)
             return response.json()['data']['image']['url']
         else:
             # Print the error message if the request was not successful
@@ -113,17 +116,20 @@ def post_random_photo():
     with open(quotes_file_path, 'r') as json_file:
         quote_data = json.load(json_file)
     while True:
-        quote_choice = random.randint(0,len(quote_data))
-        file_path = "output/images_text_overlay/"+quote_data[quote_choice]['_id']+"1024x1024.jpeg"
-        if os.path.isfile(file_path) and 'post_count' not in quote_data[quote_choice]:
+        quote_choice = random.randint(0,len(quote_data)-1)
+        file_path = os.path.join("output","images_text_overlay",quote_data[quote_choice]['_id']+"1024x1024.jpeg")
+        if os.path.isfile(file_path):
             upload_url = upload_to_imgbb(file_path)
             container_id = create_media_container(upload_url, quote_data[quote_choice]['hashtags'])
             publish_media_container(container_id)
-            quote_data[quote_choice]['post_count'] = '1'
+            if 'post_count' not in quote_data[quote_choice]:
+                quote_data[quote_choice]['post_count'] = '1'
+            else:
+                quote_data[quote_choice]['post_count'] = str(int(quote_data[quote_choice]['post_count'])+1)
             print("Posted image ID: "+ quote_data[quote_choice]['_id'])
             break
         else:
-            print("Image already posted")
+            print("Image file path not valid: " + file_path)
     with open(quotes_file_path, 'w') as json_file:
         json.dump(quote_data, json_file)
 

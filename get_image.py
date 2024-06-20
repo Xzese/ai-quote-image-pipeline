@@ -114,10 +114,12 @@ with open(quotes_file_path, 'r') as json_file:
 
 width = 512
 height = 512
+output_image_path = os.getenv("OUTPUT_IMAGE_PATH")
+overlay_image_path = os.getenv("OVERLAY_OUTPUT_PATH")
 
 for x in range(len(quote_data)):
     try:
-        if 'prompt' in quote_data[x] and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
+        if 'prompt' in quote_data[x] and not os.path.isfile(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")):
             payload = {
                 "prompt": quote_data[x]['prompt'] + " Must have a positive, high energy atmosphere.",
                 "steps": 30,
@@ -143,9 +145,9 @@ for x in range(len(quote_data)):
                     image_binary = base64.b64decode(image_base64)
                     image_data = io.BytesIO(image_binary) 
                     image = Image.open(image_data)
-                    image.save("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")
+                    image.save(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"))
                     print("Image Generated for quote " + str(x))
-                    image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg", quote_data[x]['content'], quote_data[x]['author'])
+                    image_overlay = overlay_text_on_image(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"), os.path.join(overlay_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg"), quote_data[x]['content'], quote_data[x]['author'])
                     if image_overlay:
                         print("Added overlay for quote "+ str(x))
                     else:
@@ -154,8 +156,8 @@ for x in range(len(quote_data)):
                     print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
-        elif 'prompt' in quote_data[x] and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png") and not os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
-            image = Image.open("output/images/"+ quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png")
+        elif 'prompt' in quote_data[x] and os.path.isfile(os.path.join(output_image_path, quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png")) and not os.path.isfile(os.path.join(output_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")):
+            image = Image.open(os.path.join(output_image_path, quote_data[x]['_id'] + str(width) + "x" + str(height) + ".png"))
             buffered = io.BytesIO()
             image.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -171,17 +173,17 @@ for x in range(len(quote_data)):
                 image_binary = base64.b64decode(image_base64)
                 image_data = io.BytesIO(image_binary) 
                 image = Image.open(image_data)
-                image.save("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")
+                image.save(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"))
                 print("Image Generated for quote " + str(x))
-                image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg", quote_data[x]['content'], quote_data[x]['author'])
+                image_overlay = overlay_text_on_image(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"), os.path.join(overlay_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg"), quote_data[x]['content'], quote_data[x]['author'])
                 if image_overlay:
                     print("Added overlay for quote "+ str(x))
                 else:
                     print("Failed to add overlay for quote "+ str(x))
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
-        elif not os.path.isfile("output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg") and os.path.isfile("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"):
-            image_overlay = overlay_text_on_image("output/images/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png", "output/images_text_overlay/"+ quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg", quote_data[x]['content'], quote_data[x]['author'])
+        elif not os.path.isfile(os.path.join(overlay_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg")) and os.path.isfile(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")):
+            image_overlay = overlay_text_on_image(os.path.join(output_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"), os.path.join(overlay_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg"), quote_data[x]['content'], quote_data[x]['author'])
             if image_overlay:
                 print("Added overlay for quote "+ str(x))
             else:
