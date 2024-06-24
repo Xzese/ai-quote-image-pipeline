@@ -1,0 +1,3 @@
+[submodule "auth_server"]
+	path = auth_server
+	url = https://github.com/Xzese/FB_Graph_Local_Auth
