@@ -7,6 +7,7 @@ import json
 import random
 import datetime
 import time
+from auth_server import local_browser_capture
 
 dotenv.load_dotenv()
 
