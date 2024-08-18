@@ -26,7 +26,7 @@ def convert_png_to_jpg(png_image_path, jpg_image_path, quality=90):
 def overlay_text_on_image(image_path, output_path, quote, author):
     try:
         text_size_accepted = False
-        font_file = "DancingScript-Bold.ttf"
+        font_file = "Alegreya-VariableFont.ttf"
         # Load image and prepare for drawing
         image = Image.open(image_path)
         draw = ImageDraw.Draw(image)
@@ -183,6 +183,7 @@ for x in range(len(quote_data)):
             else:
                 print(f"Failed to retrieve data. HTTP Status code: {response.status_code}")
         elif not os.path.isfile(os.path.join(overlay_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg")) and os.path.isfile(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png")):
+            convert_png_to_jpg(os.path.join(output_image_path, quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"), os.path.join(overlay_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg"), quality=90)
             image_overlay = overlay_text_on_image(os.path.join(output_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".png"), os.path.join(overlay_image_path,quote_data[x]['_id'] + str(width*2) + "x" + str(height*2) + ".jpeg"), quote_data[x]['content'], quote_data[x]['author'])
             if image_overlay:
                 print("Added overlay for quote "+ str(x))
