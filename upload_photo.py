@@ -7,6 +7,9 @@ import json
 import random
 import datetime
 import time
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 dotenv.load_dotenv()
 
@@ -90,10 +93,12 @@ def publish_media_container(creation_id):
             # Print the error message if the request was not successful
             add_to_log("Error publishing media container:" + response.text)
             print("Error publishing media container:", response.text)
+            send_email_alert("[Instagram AI Image] Facebook Token Issue", "There has been an Error:  " + response.text)
             return None
     else:
         add_to_log("No Valid Facebook Token")
         print("No Valid Facebook Token")
+        send_email_alert("[Instagram AI Image] Facebook Token Expired", "There has been an Error: Your Facebook Token Expired on " + os.getenv('ACCESS_TOKEN_EXPIRY'))
         return "No Valid Token"
     
 def upload_to_imgbb(image_path):
@@ -126,6 +131,7 @@ def upload_to_imgbb(image_path):
             print("Error Uploading Image: ", response.text)
             return None
     else:
+        send_email_alert("[Instagram AI Image] No Valid IMGBB API Key", "There has been an Error: No Valid IMGBB API Key")
         return "No Valid IMGBB API Key"
 
 def post_random_photo():
@@ -139,7 +145,7 @@ def post_random_photo():
             upload_url = upload_to_imgbb(file_path)
             container_id = create_media_container(upload_url, quote_data[quote_choice]['hashtags'])
             response = publish_media_container(container_id)
-            if response == "No Valid Token":
+            if response == "No Valid Token" or response == None:
                 break
             if 'post_count' not in quote_data[quote_choice]:
                 quote_data[quote_choice]['post_count'] = '1'
@@ -153,6 +159,31 @@ def post_random_photo():
             print("Image file path not valid: " + file_path)
     with open(quotes_file_path, 'w') as json_file:
         json.dump(quote_data, json_file)
+
+def send_email_alert(subject, body):
+    try:
+        # Connect to SMTP server
+        server = smtplib.SMTP(os.getenv('SMTP_SERVER'), os.getenv('SMTP_PORT'))
+        server.starttls()
+        server.login(os.getenv('SENDER_EMAIL'), os.getenv('SENDER_PASSWORD'))
+
+        # Compose email message
+        msg = MIMEMultipart()
+        msg['From'] = os.getenv('SENDER_EMAIL')
+        msg['To'] = os.getenv('RECIPIENT_EMAIL')
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Send email
+        server.sendmail(os.getenv('SENDER_EMAIL'), os.getenv('RECIPIENT_EMAIL'), msg.as_string())
+
+        # Close connection
+        server.quit()
+
+        print("Email alert sent with subject: " + subject)
+        add_to_log("Email alert sent with subject: " + subject)
+    except Exception as e:
+        print('Error sending email notification:', e)
 
 post_random_photo()
 
