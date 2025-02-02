@@ -7,7 +7,6 @@ import json
 import random
 import datetime
 import time
-from auth_server import local_browser_capture
 
 dotenv.load_dotenv()
 
@@ -82,7 +81,6 @@ def publish_media_container(creation_id):
         }
         # Send a GET request to the endpoint URL with the parameters
         response = requests.post(endpoint_url, params=params)
-        
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
             add_to_log("Published media container: " + creation_id)
@@ -94,6 +92,8 @@ def publish_media_container(creation_id):
             print("Error publishing media container:", response.text)
             return None
     else:
+        add_to_log("No Valid Facebook Token")
+        print("No Valid Facebook Token")
         return "No Valid Token"
     
 def upload_to_imgbb(image_path):
@@ -138,7 +138,9 @@ def post_random_photo():
         if os.path.isfile(file_path):
             upload_url = upload_to_imgbb(file_path)
             container_id = create_media_container(upload_url, quote_data[quote_choice]['hashtags'])
-            publish_media_container(container_id)
+            response = publish_media_container(container_id)
+            if response == "No Valid Token":
+                break
             if 'post_count' not in quote_data[quote_choice]:
                 quote_data[quote_choice]['post_count'] = '1'
             else:
