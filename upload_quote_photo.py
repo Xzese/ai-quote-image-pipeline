@@ -19,7 +19,13 @@ def get_random_photo():
         caption = quote_data[quote_choice]['hashtags']
         return file_path, caption
 
-file_path, caption = get_random_photo()
-post_random_photo(file_path, caption)
+while True:
+    try:
+        file_path, caption = get_random_photo()
+        post_random_photo(file_path, caption)
+        break
+    except:
+        print("Trying again for another photo as failed")
+
 
 time.sleep(60*60*3)
