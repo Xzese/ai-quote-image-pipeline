@@ -1,3 +1,5 @@
 requests==2.31.0
 python-dotenv==1.0.1
 secure-smtplib==0.1.1
+boto3==1.40.71
+regex==2025.11.3
