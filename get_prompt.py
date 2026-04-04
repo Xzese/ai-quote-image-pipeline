@@ -2,8 +2,9 @@ import json
 import dotenv
 import os
 import re
+import signal
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 from transformers import AutoTokenizer
 from openai import OpenAI
@@ -25,21 +26,43 @@ if not quotes_file_path:
     raise ValueError("QUOTES_FILE_PATH is not set")
 
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+client = OpenAI(
+    base_url="http://localhost:1234/v1",
+    api_key="lm-studio",
+)
 
 file_lock = threading.Lock()
 print_lock = threading.Lock()
 
+# Graceful shutdown flags
+stop_event = threading.Event()
+force_exit_event = threading.Event()
+
 
 def log(message: str) -> None:
     with print_lock:
-        print(message)
+        print(message, flush=True)
+
+
+def handle_sigint(signum, frame):
+    if not stop_event.is_set():
+        log("\nCtrl+C received. Graceful shutdown started: cancelling pending work, waiting for running tasks to finish...")
+        stop_event.set()
+    else:
+        force_exit_event.set()
+        log("\nSecond Ctrl+C received. Exiting immediately.")
+        raise SystemExit(130)
+
+
+signal.signal(signal.SIGINT, handle_sigint)
 
 
 def save_json(data) -> None:
     with file_lock:
-        with open(quotes_file_path, "w", encoding="utf-8") as json_file:
+        tmp_path = f"{quotes_file_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as json_file:
             json.dump(data, json_file, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, quotes_file_path)
 
 
 with open(quotes_file_path, "r", encoding="utf-8") as json_file:
@@ -77,13 +100,18 @@ def is_blank(value):
 
 
 def call_model(messages, temperature=0.7, max_tokens=150):
+    if stop_event.is_set():
+        raise InterruptedError("Shutdown requested before model call")
+
     completion = client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
         temperature=temperature,
         stream=False,
         max_tokens=max_tokens,
+        timeout=60,  # helps prevent hanging forever during shutdown
         extra_body={
+            "preset": "@local:no-thinking",
             "chat_template_kwargs": {
                 "enable_thinking": False
             }
@@ -94,6 +122,10 @@ def call_model(messages, temperature=0.7, max_tokens=150):
 
 def generate_prompt(item, item_index):
     for attempt in range(1, MAX_PROMPT_RETRIES + 1):
+        if stop_event.is_set():
+            log(f"Item {item_index}: prompt generation skipped due to shutdown")
+            return None
+
         chat_message = (
             "Generate an image generation prompt for a diffusion model that matches "
             "the tone of the following quote. Do not mention the author. Do not mention "
@@ -143,6 +175,10 @@ def generate_prompt(item, item_index):
 
 def generate_hashtags(item, item_index):
     for attempt in range(1, MAX_HASHTAG_RETRIES + 1):
+        if stop_event.is_set():
+            log(f"Item {item_index}: hashtag generation skipped due to shutdown")
+            return None
+
         chat_message = (
             "Generate a string of 20 or fewer instagram hashtags. "
             "They must be related to the quote and/or the author. "
@@ -187,27 +223,30 @@ def generate_hashtags(item, item_index):
 
 
 def process_item(index):
+    if stop_event.is_set():
+        return index, False
+
     item = quote_data[index]
     changed = False
 
     log(f"Generating for Item {index}")
 
-    if "prompt" not in item or is_blank(item["prompt"]):
+    if ("prompt" not in item or is_blank(item["prompt"])) and not stop_event.is_set():
         prompt = generate_prompt(item, index)
         if prompt:
             item["prompt"] = prompt
             changed = True
             log(f"Prompt Accepted for Item {index}: {prompt}")
-        else:
+        elif not stop_event.is_set():
             log(f"Prompt generation failed for Item {index} after {MAX_PROMPT_RETRIES} attempts")
 
-    if "hashtags" not in item or is_blank(item["hashtags"]):
+    if ("hashtags" not in item or is_blank(item["hashtags"])) and not stop_event.is_set():
         hashtags = generate_hashtags(item, index)
         if hashtags:
             item["hashtags"] = hashtags
             changed = True
             log(f"Hashtags Accepted for Item {index}: {hashtags}")
-        else:
+        elif not stop_event.is_set():
             log(f"Hashtag generation failed for Item {index} after {MAX_HASHTAG_RETRIES} attempts")
 
     if changed:
@@ -230,19 +269,52 @@ if RESET_PROMPTS_AND_HASHTAGS:
 
 
 def main():
-    with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
-        futures = [executor.submit(process_item, i) for i in range(len(quote_data))]
+    executor = ThreadPoolExecutor(max_workers=PARALLEL_WORKERS)
+    futures = {}
 
-        for future in as_completed(futures):
-            try:
-                index, changed = future.result()
-                log(f"Finished Item {index} (changed={changed})")
-            except Exception as error:
-                log(f"An error occurred: {error}")
+    try:
+        for i in range(len(quote_data)):
+            if stop_event.is_set():
+                break
+            future = executor.submit(process_item, i)
+            futures[future] = i
 
-    # Final save to ensure latest state is persisted
-    save_json(quote_data)
-    log("All done.")
+        pending = set(futures.keys())
+
+        while pending:
+            if stop_event.is_set():
+                # Cancel anything not started yet
+                for future in list(pending):
+                    if future.cancel():
+                        idx = futures[future]
+                        log(f"Cancelled pending Item {idx}")
+                        pending.remove(future)
+
+                if not pending:
+                    break
+
+            done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+
+            for future in done:
+                index = futures[future]
+                try:
+                    item_index, changed = future.result()
+                    log(f"Finished Item {item_index} (changed={changed})")
+                except InterruptedError:
+                    log(f"Stopped Item {index} due to shutdown request")
+                except Exception as error:
+                    log(f"An error occurred in Item {index}: {error}")
+
+        # Final save to ensure latest state is persisted
+        save_json(quote_data)
+
+        if stop_event.is_set():
+            log("Graceful shutdown complete.")
+        else:
+            log("All done.")
+
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 if __name__ == "__main__":
