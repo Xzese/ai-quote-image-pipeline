@@ -112,6 +112,12 @@ ACCESS_TOKEN_EXPIRY=
 IG_BUSINESS_USER_ID=
 LOG_FILE=output/instagram.log
 
+# Optional remote Facebook token provider
+FACEBOOK_TOKEN_API_BASE_URL=
+FACEBOOK_TOKEN_API_KEY=
+CF_ACCESS_CLIENT_ID=
+CF_ACCESS_CLIENT_SECRET=
+
 # Optional S3/R2 image hosting
 S3_BUCKET_NAME=
 S3_ACCESS_KEY_ID=
@@ -130,6 +136,42 @@ The retry values apply to one run of the posting module.
 Posting credentials are optional unless you run the posting module. After the
 final failed posting attempt, the script uses the SMTP settings above to send one
 failure alert.
+
+#### Remote Facebook token provider
+
+Static `ACCESS_TOKEN` and `ACCESS_TOKEN_EXPIRY` values remain supported. As an
+optional alternative, the uploader can retrieve the current token from a
+server-side Cloudflare Worker before it posts:
+
+```ini
+FACEBOOK_TOKEN_API_BASE_URL=https://facebook-token-worker.example.com
+FACEBOOK_TOKEN_API_KEY=
+CF_ACCESS_CLIENT_ID=
+CF_ACCESS_CLIENT_SECRET=
+```
+
+When `FACEBOOK_TOKEN_API_BASE_URL` is empty, no token-provider request is made.
+When it is set, all four values above are required. The uploader sends a
+`GET /api/token` request with the Cloudflare Access service-token headers and
+the token API key as a bearer credential. A successful endpoint response has
+this shape:
+
+```json
+{
+  "accessToken": "<facebook-access-token>",
+  "expiresAt": "2099-01-01T00:00:00.000Z",
+  "expired": false
+}
+```
+
+The retrieved Facebook access token is placed only in the current process
+environment; it is not written back to `.env`. The client setting is named
+`FACEBOOK_TOKEN_API_KEY` to distinguish it from other API credentials. If the
+Worker itself names the matching secret `TOKEN_API_KEY`, use the same secret
+value under the client-side name shown above.
+
+Keep all three credentials out of source control and logs. The static token
+settings are used only when the optional provider URL is not configured.
 
 ## LM Studio
 

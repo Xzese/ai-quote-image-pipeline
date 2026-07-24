@@ -149,6 +149,87 @@ def test_main_returns_zero_immediately_after_success(monkeypatch, tmp_path):
     assert posts[0][1] == "#quote"
 
 
+def test_main_calls_facebook_token_provider_once_before_success(monkeypatch, tmp_path):
+    quotes_file = tmp_path / "quotes.json"
+    output_dir = tmp_path / "output"
+    _write_quotes(quotes_file)
+    _set_upload_env(monkeypatch, quotes_file, output_dir)
+    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
+    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
+
+    events: list[str] = []
+
+    def provider_success():
+        events.append("provider")
+        return True
+
+    monkeypatch.setattr(
+        upload_quote_photo,
+        "configure_facebook_token_from_provider",
+        provider_success,
+    )
+
+    def post_once(_path, caption):
+        events.append("post")
+        return None
+
+    result = upload_quote_photo.main(
+        post_func=post_once,
+        alert_func=lambda *_args, **_kwargs: None,
+        sleep_func=lambda *_args, **_kwargs: None,
+        randomizer=_FakeRandom(
+            {
+                "_id": "q001",
+                "content": "quote",
+                "author": "Author",
+                "hashtags": "#quote",
+            }
+        ),
+    )
+
+    assert result == 0
+    assert events == ["provider", "post"]
+
+
+def test_main_returns_failure_when_provider_raises_without_post(monkeypatch, tmp_path):
+    quotes_file = tmp_path / "quotes.json"
+    output_dir = tmp_path / "output"
+    _write_quotes(quotes_file)
+    _set_upload_env(monkeypatch, quotes_file, output_dir)
+    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
+    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
+
+    def provider_raises():
+        raise upload_quote_photo.FacebookTokenProviderError("token provider failed")
+
+    monkeypatch.setattr(
+        upload_quote_photo,
+        "configure_facebook_token_from_provider",
+        provider_raises,
+    )
+
+    called = {"post": 0}
+
+    result = upload_quote_photo.main(
+        post_func=lambda *_args, **_kwargs: called.__setitem__(
+            "post", called["post"] + 1
+        ),
+        alert_func=lambda *_args, **_kwargs: None,
+        sleep_func=lambda *_args, **_kwargs: None,
+        randomizer=_FakeRandom(
+            {
+                "_id": "q001",
+                "content": "quote",
+                "author": "Author",
+                "hashtags": "#quote",
+            }
+        ),
+    )
+
+    assert result == 1
+    assert called["post"] == 0
+
+
 def test_main_returns_failure_when_email_alert_itself_fails(monkeypatch, tmp_path):
     quotes_file = tmp_path / "quotes.json"
     output_dir = tmp_path / "output"
