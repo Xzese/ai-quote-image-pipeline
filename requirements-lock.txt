@@ -489,9 +489,9 @@ numpy==2.4.6 \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
     # via transformers
-openai==1.95.1 \
-    --hash=sha256:8bbdfeceef231b1ddfabbc232b179d79f8b849aab5a7da131178f8d10e0f162f \
-    --hash=sha256:f089b605282e2a2b6776090b4b46563ac1da77f56402a222597d591e2dcc1086
+openai==2.48.0 \
+    --hash=sha256:231b1e7661dda14574986c2f71451e9d584b7fe69e0ee6480e12ed090b48fc16 \
+    --hash=sha256:c98df30aaaf93c51979f64d3e7c5b76464f8be0173368266229eb8fe6bd30f2c
     # via -r requirements.txt
 packageurl-python==0.17.6 \
     --hash=sha256:1252ce3a102372ca6f86eb968e16f9014c4ba511c5c37d95a7f023e2ca6e5c25 \
