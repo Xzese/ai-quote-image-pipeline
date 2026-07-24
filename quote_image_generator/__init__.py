@@ -1,0 +1,1 @@
+"""Quote image generation pipeline."""
