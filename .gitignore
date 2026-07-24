@@ -163,3 +163,50 @@ cython_debug/
 
 output
 archive
+
+# IDE settings
+.idea/
+.vscode/
+*.iml
+
+# Environment folders and tool caches
+.lmstudio/
+.cache/
+.local/
+.huggingface/
+.cache/huggingface/
+
+# Generated outputs, quote datasets, and model artifacts
+output/
+output/images/
+output/images_text_overlay/
+quotes.json
+quotes_*.json
+quote_*.json
+
+# Image outputs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+
+# Model weights/checkpoints
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+*.pth
+ComfyUI/models/
+ComfyUI/model_cache/
+
+# Logs / temp
+*.log
+logs/
+tmp/
+*.tmp
+*.temp
+
+# LM Studio / Hugging Face
+lmstudio/
+lm-studio/

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("upload_photo/requirements.txt").read_text().splitlines()
+          filtered = []
+          for line in source:
+              stripped = line.strip()
+              if not stripped or stripped.startswith("#"):
+                  continue
+              if stripped.lower().startswith("secure-smtplib=="):
+                  continue
+              filtered.append(stripped)
+          Path("/tmp/ci-upload-photo-requirements.txt").write_text("\n".join(filtered) + ("\n" if filtered else ""))
+          PY
+          python -m pip install -r /tmp/ci-upload-photo-requirements.txt
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Compile all python files
+        run: python -m compileall -q .
+
+      - name: Ruff format check
+        run: ruff format --check --exclude upload_photo .
+
+      - name: Ruff lint check
+        run: ruff check --exclude upload_photo .
+
+      - name: Run tests (services mocked by defaults/env)
+        env:
+          COMFYUI_URL: "http://127.0.0.1:1"
+          LM_STUDIO_BASE_URL: "http://127.0.0.1:1/v1"
+          LM_STUDIO_API_KEY: "ci-test-key"
+          LM_STUDIO_MODEL: "qwen/qwen3.5-9b"
+          LM_STUDIO_PRESET: "@local:no-thinking"
+          LM_STUDIO_PARALLEL_WORKERS: "1"
+          QUOTES_FILE_PATH: "/tmp/quotes.json"
+        run: pytest -q
+
+      - name: Dependency vulnerability checks
+        run: |
+          pip-audit -r requirements.txt
+          pip-audit -r requirements-dev.txt
+          pip-audit
