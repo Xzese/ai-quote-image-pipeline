@@ -1,7 +1,7 @@
 # Security Policy
 
 If you discover a security issue, do not open a public issue. Instead, use
-[GitHub private vulnerability reporting](https://github.com/Xzese/QuoteImageGenerator/security/advisories/new)
+[GitHub private vulnerability reporting](https://github.com/Xzese/ai-quote-image-pipeline/security/advisories/new)
 and include a minimal reproducible description, impacted files, and steps to
 reproduce.
 

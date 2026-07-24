@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in improving QuoteImageGenerator.
+Thanks for your interest in improving AI Quote Image Pipeline.
 
 ## Development setup
 

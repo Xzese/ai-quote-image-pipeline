@@ -1,6 +1,10 @@
-# QuoteImageGenerator — Public release notes
+# AI Quote Image Pipeline
 
-## What this release includes
+A local-first Python pipeline for turning quotes into AI-generated social images.
+It uses LM Studio for prompt and hashtag generation, ComfyUI for image rendering,
+and can optionally publish completed images to Instagram.
+
+## What the pipeline does
 
 1. Pull quote data from Quotable into a local JSON corpus.
 2. Generate prompt text + hashtags through LM Studio for each quote.
@@ -12,8 +16,8 @@
 Use a clean clone for release artifacts:
 
 ```bash
-git clone --recurse-submodules <repository-url>
-cd QuoteImageGenerator
+git clone --recurse-submodules https://github.com/Xzese/ai-quote-image-pipeline.git
+cd ai-quote-image-pipeline
 git submodule update --init --recursive
 ```
 
@@ -40,20 +44,12 @@ optional upload dependency set for reproducible Python 3.11+ installs. This
 project uses Python's standard-library `smtplib`; no separate SMTP package is
 required.
 
-Regenerate the lock with Python 3.11 after changing a dependency manifest:
+After intentionally changing a requirements file, regenerate the lock:
 
 ```bash
 python -m piptools compile --allow-unsafe --generate-hashes \
   --output-file=requirements-lock.txt --strip-extras \
   requirements-dev.txt requirements.txt upload_photo/requirements.txt
-```
-
-After intentionally changing a requirements file, regenerate the lock:
-
-```bash
-pip-compile --allow-unsafe --generate-hashes --strip-extras \
-  --output-file=requirements-lock.txt \
-  requirements.txt requirements-dev.txt upload_photo/requirements.txt
 ```
 
 ## Repository layout
@@ -81,10 +77,13 @@ cp .env.example .env
 QUOTES_FILE_PATH=output/quotes.json
 OUTPUT_IMAGE_PATH=output/images
 OVERLAY_OUTPUT_PATH=output/images_text_overlay
-COMFYUI_URL=http://127.0.0.1:8000
-COMFYUI_WORKFLOW_PATH=workflows/image_z_image_turbo.json
-COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=false
+UPLOAD_QUOTE_MAX_ATTEMPTS=3
+UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
+```
 
+### LM Studio configuration
+
+```ini
 LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
 LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=qwen/qwen3.5-9b
@@ -94,9 +93,19 @@ LM_STUDIO_PRESET=
 LM_STUDIO_NATIVE_API_BASE_URL=
 LM_STUDIO_CONTEXT_LENGTH=8192
 LM_STUDIO_PARALLEL_WORKERS=4
-UPLOAD_QUOTE_MAX_ATTEMPTS=3
-UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
+```
 
+### ComfyUI configuration
+
+```ini
+COMFYUI_URL=http://127.0.0.1:8000
+COMFYUI_WORKFLOW_PATH=workflows/image_z_image_turbo.json
+COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=false
+```
+
+### Optional publishing configuration
+
+```ini
 # Optional Instagram posting
 ACCESS_TOKEN=
 ACCESS_TOKEN_EXPIRY=
@@ -117,11 +126,30 @@ SENDER_PASSWORD=
 RECIPIENT_EMAIL=
 ```
 
-Use environment settings for LM Studio; do not edit package constants in a release run.
 The retry values apply to one run of the posting module.
 Posting credentials are optional unless you run the posting module. After the
 final failed posting attempt, the script uses the SMTP settings above to send one
 failure alert.
+
+## LM Studio
+
+[LM Studio](https://lmstudio.ai/) runs the local language model used to turn
+quotes into visual prompts and hashtags. See the
+[LM Studio developer documentation](https://lmstudio.ai/docs/developer) for
+installation, local-server, REST API, and OpenAI-compatible endpoint guidance.
+
+1. Install LM Studio and start its local API server.
+2. Select a model that supports structured JSON output.
+3. Configure the `LM_STUDIO_*` values in `.env`.
+4. Run `python -m quote_image_generator.get_prompt`.
+
+Use environment settings for LM Studio; do not edit package constants for a
+release run. On startup, `get_prompt.py` checks whether the configured model is
+available. If it is missing, the script uses LM Studio's native API to download
+and load it before continuing.
+
+Prompt and hashtag generation uses schema-constrained JSON through the
+OpenAI-compatible API instead of parsing free-form model output.
 
 `LM_STUDIO_NATIVE_API_BASE_URL` is optional; leaving it blank causes
 `get_prompt.py` to derive the native API base as `/api/v1` from
@@ -131,21 +159,28 @@ failure alert.
 prompts/hashtags. The script clamps the configured value to the lower of this
 setting and the model-reported maximum context length.
 
-## LM Studio / model workflow
+## ComfyUI
 
-- Comfy workflow model files expected by the default pipeline:
-  - `ae.safetensors`
-  - `qwen_3_4b.safetensors`
-  - `z_image_turbo_bf16.safetensors`
-- On start, `get_prompt.py` checks the configured model is available. If missing,
-  it downloads it through LM Studio native endpoints, waits until download/load
-  completes, then continues.
-- Prompt/hashtag generation and readiness checks now use structured JSON-schema
-  output (OpenAI-compatible `response_format` payload) rather than free-form
-  text parsing.
-- Run ComfyUI with API access (`COMFYUI_URL`).
-- `workflows/image_z_image_turbo.json` is the repository-relative default workflow.
-- Default prompt seed behavior is in-script only; keep default parameters unless intentionally changed.
+[ComfyUI](https://comfy.org/) renders the image workflow after LM Studio has
+generated the visual prompt. Use the
+[official ComfyUI documentation](https://docs.comfy.org/) for installation and
+local API guidance, and the
+[workflow documentation](https://docs.comfy.org/development/core-concepts/workflow)
+for an explanation of node-based workflows.
+
+1. Install and start a local ComfyUI instance.
+2. Make its API reachable at the configured `COMFYUI_URL`.
+3. Install the model files required by the bundled workflow:
+   - `ae.safetensors`
+   - `qwen_3_4b.safetensors`
+   - `z_image_turbo_bf16.safetensors`
+4. Keep `COMFYUI_WORKFLOW_PATH` pointed at
+   `workflows/image_z_image_turbo.json`, or provide another API-format workflow.
+5. Run `python -m quote_image_generator.get_image`.
+
+The default prompt seed behavior is controlled in the script. Keep the defaults
+unless you intentionally want to change image reproducibility. This project
+uses a local ComfyUI API rather than the ComfyUI Cloud API.
 
 ## Run order
 
