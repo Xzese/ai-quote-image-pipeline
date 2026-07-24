@@ -9,15 +9,19 @@ import os
 from pathlib import Path
 import random
 import time
+import sys
 
-from .config import (
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from quote_image_generator.config import (
     ConfigurationError,
     get_env_int,
     get_env_str,
     load_project_env,
     resolve_repo_path,
 )
-from .quote_validation import (
+from quote_image_generator.quote_validation import (
     QuoteValidationError,
     safe_output_file_path,
     validate_quote_records,

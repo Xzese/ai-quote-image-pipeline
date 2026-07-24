@@ -7,12 +7,16 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+import sys
 from typing import Any, Callable, Mapping, Sequence
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-from .config import (
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from quote_image_generator.config import (
     ConfigurationError,
     ensure_directory,
     get_env_bool,
@@ -21,7 +25,7 @@ from .config import (
     load_project_env,
     resolve_repo_path,
 )
-from .quote_validation import (
+from quote_image_generator.quote_validation import (
     QuoteValidationError,
     safe_output_file_path,
     validate_quote_records,
