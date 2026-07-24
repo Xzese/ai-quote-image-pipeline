@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sys
 from typing import Any
 
 import requests
 
-from .config import (
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from quote_image_generator.config import (
     ConfigurationError,
     get_env_str,
     get_required_file_path,
     load_project_env,
 )
-from .quote_validation import validate_quote_records
+from quote_image_generator.quote_validation import validate_quote_records
 
-DEFAULT_ENDPOINT_URL = "https://api.quotable.io/quotes"
+DEFAULT_ENDPOINT_URL = "http://api.quotable.io/quotes"
 DEFAULT_PAGE_LIMIT = 150
 DEFAULT_TIMEOUT_SECONDS = 30
 
@@ -82,6 +86,27 @@ def write_quotes(path, quotes: list[dict[str, Any]]) -> None:
         json.dump(quotes, json_file, indent=4)
 
 
+def deduplicate_quotes_by_id(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    deduplicated: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    duplicate_count = 0
+
+    for record in records:
+        quote_id = record.get("_id") if isinstance(record, dict) else None
+        if isinstance(quote_id, str) and quote_id in seen_ids:
+            duplicate_count += 1
+            continue
+
+        if isinstance(quote_id, str):
+            seen_ids.add(quote_id)
+
+        deduplicated.append(record)
+
+    return deduplicated, duplicate_count
+
+
 def main() -> int:
     load_project_env()
 
@@ -91,6 +116,10 @@ def main() -> int:
 
         with requests.Session() as session:
             quote_list = fetch_quotes(session=session, endpoint_url=endpoint_url)
+
+        quote_list, duplicate_count = deduplicate_quotes_by_id(quote_list)
+        if duplicate_count:
+            print(f"Warning: Removed {duplicate_count} duplicate quote record(s) before validation.")
 
         validated_quotes = validate_quote_records(quote_list)
         write_quotes(quotes_file_path, validated_quotes)

@@ -73,7 +73,11 @@ COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=false
 LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
 LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=qwen/qwen3.5-9b
-LM_STUDIO_PRESET=@local:no-thinking
+# `LM_STUDIO_MODEL` should usually be a model key like `qwen/qwen3.5-9b`.
+# `https://lmstudio.ai/models/...` URLs are normalized to this key form by the script.
+LM_STUDIO_PRESET=
+LM_STUDIO_NATIVE_API_BASE_URL=
+LM_STUDIO_CONTEXT_LENGTH=8192
 LM_STUDIO_PARALLEL_WORKERS=4
 UPLOAD_QUOTE_MAX_ATTEMPTS=3
 UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
@@ -104,12 +108,26 @@ Posting credentials are optional unless you run the posting module. After the
 final failed posting attempt, the script uses the SMTP settings above to send one
 failure alert.
 
+`LM_STUDIO_NATIVE_API_BASE_URL` is optional; leaving it blank causes
+`get_prompt.py` to derive the native API base as `/api/v1` from
+`LM_STUDIO_BASE_URL`.
+
+`LM_STUDIO_CONTEXT_LENGTH` sets the context window cap used when generating
+prompts/hashtags. The script clamps the configured value to the lower of this
+setting and the model-reported maximum context length.
+
 ## LM Studio / model workflow
 
 - Comfy workflow model files expected by the default pipeline:
   - `ae.safetensors`
   - `qwen_3_4b.safetensors`
   - `z_image_turbo_bf16.safetensors`
+- On start, `get_prompt.py` checks the configured model is available. If missing,
+  it downloads it through LM Studio native endpoints, waits until download/load
+  completes, then continues.
+- Prompt/hashtag generation and readiness checks now use structured JSON-schema
+  output (OpenAI-compatible `response_format` payload) rather than free-form
+  text parsing.
 - Run ComfyUI with API access (`COMFYUI_URL`).
 - `workflows/image_z_image_turbo.json` is the repository-relative default workflow.
 - Default prompt seed behavior is in-script only; keep default parameters unless intentionally changed.
@@ -202,6 +220,16 @@ output/
   → Ensure `QUOTES_FILE_PATH=output/quotes.json` exists in `.env`.
 - `requests`/connection failures to LM Studio  
   → Confirm `LM_STUDIO_BASE_URL` points to a running LM Studio local API.
+- `lmstudio` model download never completes / remains `loading`
+  → Confirm `LM_STUDIO_NATIVE_API_BASE_URL` reaches the local native API
+  (`/api/v1` by default), check model download permissions, and ensure disk + RAM
+  headroom are sufficient.
+- `LM Studio ping failed` or `model load failed`
+  → Verify the requested model identifier is correct, wait until load completes,
+  and confirm the model is large enough to support structured output.
+- `structured output` / `response_format` errors or empty JSON responses
+  → Some smaller models (notably <7B) may not support schema-constrained JSON
+  outputs. Use a supported model or increase model size in `LM_STUDIO_MODEL`.
 - `ComfyUI API unreachable`  
   → Confirm `COMFYUI_URL` is reachable and workflow is loaded in the UI.
 - `Queue stalls`  

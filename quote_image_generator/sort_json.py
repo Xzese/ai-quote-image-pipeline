@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import Counter
 from pathlib import Path
+from collections import Counter
 from typing import Any
 
-from .config import get_env_str, load_project_env, resolve_repo_path
-from .quote_validation import QuoteValidationError
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from quote_image_generator.config import get_env_str, load_project_env, resolve_repo_path
+from quote_image_generator.quote_validation import QuoteValidationError
 
 
 def load_quote_file(path: Path) -> list[dict[str, Any]]:
