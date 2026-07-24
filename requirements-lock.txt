@@ -1011,9 +1011,9 @@ ruff==0.5.3 \
     --hash=sha256:e791d34d3557a3819b3704bc1f087293c821083fa206812842fa363f6018a192 \
     --hash=sha256:eafc45dd8bdc37a00b28e68cc038daf3ca8c233d73fea276dcd09defb1352841
     # via -r requirements-dev.txt
-s3transfer==0.14.0 \
-    --hash=sha256:ea3b790c7077558ed1f02a3072fb3cb992bbbd253392f4b6e9e8976941c7d456 \
-    --hash=sha256:eff12264e7c8b4985074ccce27a3b38a485bb7f7422cc8046fee9be4983e4125
+s3transfer==0.19.2 \
+    --hash=sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993 \
+    --hash=sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25
     # via boto3
 safetensors==0.8.0 \
     --hash=sha256:040070828e36dc8e122178bbbd5830ff9e97920affb84cbe0f46442497bed358 \
