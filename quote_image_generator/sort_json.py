@@ -10,7 +10,11 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from quote_image_generator.config import get_env_str, load_project_env, resolve_repo_path
+from quote_image_generator.config import (
+    get_env_str,
+    load_project_env,
+    resolve_repo_path,
+)
 from quote_image_generator.quote_validation import QuoteValidationError
 
 

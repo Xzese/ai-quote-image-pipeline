@@ -184,10 +184,7 @@ def test_normalize_model_name_removes_lmstudio_web_prefix_with_quantization():
 
 
 def test_normalize_model_name_preserves_plain_model_key():
-    assert (
-        get_prompt._normalize_model_name("qwen/qwen3.5-9b")
-        == "qwen/qwen3.5-9b"
-    )
+    assert get_prompt._normalize_model_name("qwen/qwen3.5-9b") == "qwen/qwen3.5-9b"
 
 
 def test_normalize_model_name_rejects_non_matching_urls():
@@ -195,7 +192,9 @@ def test_normalize_model_name_rejects_non_matching_urls():
         get_prompt.ConfigurationError,
         match="is a URL but is not an LM Studio model page URL",
     ):
-        get_prompt._normalize_model_name("https://example.com/models/liquid/lfm2.5-1.2b")
+        get_prompt._normalize_model_name(
+            "https://example.com/models/liquid/lfm2.5-1.2b"
+        )
 
 
 def test_normalize_model_name_rejects_unapproved_subdomain():
@@ -203,7 +202,9 @@ def test_normalize_model_name_rejects_unapproved_subdomain():
         get_prompt.ConfigurationError,
         match="is a URL but is not an LM Studio model page URL",
     ):
-        get_prompt._normalize_model_name("https://api.lmstudio.ai/models/liquid/lfm2.5-1.2b")
+        get_prompt._normalize_model_name(
+            "https://api.lmstudio.ai/models/liquid/lfm2.5-1.2b"
+        )
 
 
 def test_normalize_model_name_rejects_wrong_path():
@@ -211,7 +212,9 @@ def test_normalize_model_name_rejects_wrong_path():
         get_prompt.ConfigurationError,
         match="LM_STUDIO_MODEL URL format is invalid",
     ):
-        get_prompt._normalize_model_name("https://lmstudio.ai/library/liquid/lfm2.5-1.2b")
+        get_prompt._normalize_model_name(
+            "https://lmstudio.ai/library/liquid/lfm2.5-1.2b"
+        )
 
 
 def test_normalize_model_name_rejects_malformed_model_path():
@@ -511,6 +514,30 @@ def test_generate_prompt_consumes_structured_prompt(monkeypatch):
     assert result == "misty forest at dawn"
 
 
+def test_generate_prompt_rejects_prompt_with_double_quotes(monkeypatch):
+    attempts = 0
+
+    def fake_call_model(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return {"prompt": 'quoted text "should" be rejected'}
+
+    monkeypatch.setattr(get_prompt, "call_model", fake_call_model)
+    tokenizer = SimpleNamespace(tokenize=lambda value: value.split())
+
+    result = get_prompt.generate_prompt(
+        {"content": "Quote", "author": "Author"},
+        0,
+        client=object(),
+        tokenizer=tokenizer,
+        model_name="model",
+        preset="",
+    )
+
+    assert result is None
+    assert attempts == get_prompt.MAX_PROMPT_RETRIES
+
+
 def test_generate_hashtags_consumes_and_normalizes_structured_array(monkeypatch):
     monkeypatch.setattr(
         get_prompt,
@@ -598,12 +625,14 @@ def test_validate_lm_studio_readiness_retries_then_succeeds(monkeypatch):
     )
 
     assert attempts == get_prompt.MODEL_READINESS_RETRY_ATTEMPTS
-    assert wait_calls == [
-        get_prompt.MODEL_READINESS_RETRY_DELAY_SECONDS
-    ] * (get_prompt.MODEL_READINESS_RETRY_ATTEMPTS - 1)
+    assert wait_calls == [get_prompt.MODEL_READINESS_RETRY_DELAY_SECONDS] * (
+        get_prompt.MODEL_READINESS_RETRY_ATTEMPTS - 1
+    )
 
 
-def test_validate_lm_studio_readiness_retries_then_fails_after_three_attempts(monkeypatch):
+def test_validate_lm_studio_readiness_retries_then_fails_after_three_attempts(
+    monkeypatch,
+):
     attempts = 0
     wait_calls = []
 
@@ -645,7 +674,9 @@ def test_validate_lm_studio_readiness_cancelled_during_retry_wait(monkeypatch):
     monkeypatch.setattr(get_prompt, "call_model", stale_once)
     monkeypatch.setattr(get_prompt.stop_event, "wait", lambda _seconds: True)
 
-    with pytest.raises(InterruptedError, match="while waiting to retry readiness check"):
+    with pytest.raises(
+        InterruptedError, match="while waiting to retry readiness check"
+    ):
         get_prompt._validate_lm_studio_readiness(
             client=object(),
             model_name="qwen/qwen3.5-9b",
@@ -676,6 +707,8 @@ def test_validate_lm_studio_readiness_normalizes_model_page_url(monkeypatch):
 def test_main_injects_client_without_external_calls(monkeypatch, tmp_path):
     expected_path = tmp_path / "quotes.json"
     monkeypatch.setenv("QUOTES_FILE_PATH", str(expected_path))
+    monkeypatch.delenv("LM_STUDIO_BASE_URL", raising=False)
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.setattr(get_prompt, "load_project_env", lambda: None)
 
     monkeypatch.setattr(

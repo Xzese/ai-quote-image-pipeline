@@ -119,7 +119,9 @@ def main() -> int:
 
         quote_list, duplicate_count = deduplicate_quotes_by_id(quote_list)
         if duplicate_count:
-            print(f"Warning: Removed {duplicate_count} duplicate quote record(s) before validation.")
+            print(
+                f"Warning: Removed {duplicate_count} duplicate quote record(s) before validation."
+            )
 
         validated_quotes = validate_quote_records(quote_list)
         write_quotes(quotes_file_path, validated_quotes)

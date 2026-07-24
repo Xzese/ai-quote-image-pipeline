@@ -200,6 +200,9 @@ quote_*.json
 ComfyUI/models/
 ComfyUI/model_cache/
 
+# macOS Finder metadata
+.DS_Store
+
 # Logs / temp
 *.log
 logs/

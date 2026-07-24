@@ -301,10 +301,7 @@ def is_stale_lm_studio_readiness_error(exc: Exception) -> bool:
     if not isinstance(exc, RuntimeError):
         return False
     message = str(exc).lower()
-    return (
-        "model has not started loading" in message
-        or "has been unloaded" in message
-    )
+    return "model has not started loading" in message or "has been unloaded" in message
 
 
 def _normalize_model_name(model_name: str) -> str:
@@ -823,10 +820,11 @@ def generate_prompt(
 
         if number_of_tokens <= MAX_PROMPT_TOKENS and '"' not in prompt:
             return prompt
+        contains_double_quote = '"' in prompt
 
         log(
             f"Item {item_index}, prompt attempt {attempt}: rejected "
-            f"(tokens={number_of_tokens}, contains_double_quote={'\"' in prompt}) "
+            f"(tokens={number_of_tokens}, contains_double_quote={contains_double_quote}) "
             f"response={prompt!r}"
         )
 
@@ -1065,9 +1063,7 @@ def main() -> int:
             if force_exit_event.is_set():
                 break
 
-            done, pending = wait(
-                pending, timeout=0.2, return_when=FIRST_COMPLETED
-            )
+            done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
 
             for future in done:
                 index = futures[future]

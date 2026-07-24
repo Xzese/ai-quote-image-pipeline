@@ -32,15 +32,29 @@ Python 3.11+ is required.
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
 python -m pip install --upgrade pip
-
-TMP_REQUIREMENTS=$(mktemp)
-trap 'rm -f "$TMP_REQUIREMENTS"' EXIT
-grep -iv '^secure-smtplib' upload_photo/requirements.txt > "$TMP_REQUIREMENTS"
-python -m pip install -r "$TMP_REQUIREMENTS"    # installs upload-photo dependencies except secure-smtplib
-python -m pip install -r requirements.txt         # applies your pinned requests/python-dotenv versions
+python -m pip install --require-hashes -r requirements-lock.txt
 ```
 
-This skips `secure-smtplib` because this repo relies on stdlib `smtplib`; root `requirements.txt` is installed last so its pinned versions win.
+`requirements-lock.txt` pins and hashes the complete root, development, and
+optional upload dependency set for reproducible Python 3.11+ installs. This
+project uses Python's standard-library `smtplib`; no separate SMTP package is
+required.
+
+Regenerate the lock with Python 3.11 after changing a dependency manifest:
+
+```bash
+python -m piptools compile --allow-unsafe --generate-hashes \
+  --output-file=requirements-lock.txt --strip-extras \
+  requirements-dev.txt requirements.txt upload_photo/requirements.txt
+```
+
+After intentionally changing a requirements file, regenerate the lock:
+
+```bash
+pip-compile --allow-unsafe --generate-hashes --strip-extras \
+  --output-file=requirements-lock.txt \
+  requirements.txt requirements-dev.txt upload_photo/requirements.txt
+```
 
 ## Repository layout
 
@@ -56,7 +70,8 @@ output/                  # Generated local data, ignored by Git
 
 ## Environment
 
-Create `.env` and keep only non-sensitive values:
+Create a local `.env` from `.env.example`. A local `.env` may contain secrets and
+service credentials and must never be committed, committed to logs, or shared.
 
 ```bash
 cp .env.example .env
@@ -250,9 +265,16 @@ output/
 - Project test discovery:
   - `python -m pytest`
 
+## Governance
+
+- [CONTRIBUTING](./CONTRIBUTING.md)
+- [SECURITY](./SECURITY.md)
+- [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md)
+- [CHANGELOG](./CHANGELOG.md)
+
 ## Packaging/legal checklist
 
-- Do not commit credentials (no API tokens, secrets, or personal accounts in `.env` or repository files).
+- `.env` is local configuration and may contain credentials and tokens; do not commit it or any copied secrets.
 - Generated images are AI-assisted outputs; downstream publication rights are the distributor’s responsibility.
 - Quote text from Quotable is source-attributed and publication rights are the distributor’s responsibility.
 - `ae.safetensors`, `qwen_3_4b.safetensors`, and `z_image_turbo_bf16.safetensors` are model assets that are **not** distributed from this repo by default.
