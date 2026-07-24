@@ -8,8 +8,10 @@ import logging
 import os
 from pathlib import Path
 import random
+from datetime import time as dt_time
 import time
 import sys
+from logging.handlers import TimedRotatingFileHandler
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -44,9 +46,14 @@ ENV_MAX_ATTEMPTS = "UPLOAD_QUOTE_MAX_ATTEMPTS"
 ENV_RETRY_BASE_SECONDS = "UPLOAD_QUOTE_RETRY_BASE_SECONDS"
 ENV_QUOTES_FILE_PATH = "QUOTES_FILE_PATH"
 ENV_IMAGE_DIR = "OVERLAY_OUTPUT_PATH"
+ENV_UPLOAD_LOG_RETENTION = "UPLOAD_QUOTE_LOG_RETENTION_WEEKS"
+ENV_UPLOAD_LOG_LEVEL = "UPLOAD_QUOTE_LOG_LEVEL"
 OUTPUT_IMAGE_WIDTH = 1024
 OUTPUT_IMAGE_HEIGHT = 1024
 OUTPUT_IMAGE_EXT = "jpeg"
+DEFAULT_LOG_FILE = Path("output") / "logs" / "upload_quote_photo.log"
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_RETENTION_WEEKS = 4
 
 
 def _post_quote_photo(file_path: str, caption: str) -> object:
@@ -75,8 +82,40 @@ def _post_quote_photo(file_path: str, caption: str) -> object:
 
 
 def _configure_logging() -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    if logging.getLogger().handlers:
+        return
+
+    log_level = get_env_str(ENV_UPLOAD_LOG_LEVEL, DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL
+    retention = get_env_int(
+        ENV_UPLOAD_LOG_RETENTION, DEFAULT_LOG_RETENTION_WEEKS
+    )
+    if retention is None or retention < 0:
+        retention = DEFAULT_LOG_RETENTION_WEEKS
+
+    formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s")
+    root_logger = logging.getLogger()
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    try:
+        log_file = resolve_repo_path(DEFAULT_LOG_FILE)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = TimedRotatingFileHandler(
+            log_file,
+            when="W0",
+            interval=1,
+            backupCount=retention,
+            atTime=dt_time(0, 0),
+        )
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+    except OSError:
+        # Fall back to stdout/stderr logging when filesystem is not writable.
+        pass
+
+    root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
 
 def _parse_retry_delay() -> float:
