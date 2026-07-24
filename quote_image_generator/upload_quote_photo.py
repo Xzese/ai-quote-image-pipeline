@@ -23,6 +23,10 @@ from quote_image_generator.config import (
     load_project_env,
     resolve_repo_path,
 )
+from quote_image_generator.facebook_token_provider import (
+    FacebookTokenProviderError,
+    configure_facebook_token_from_provider,
+)
 from quote_image_generator.quote_validation import (
     QuoteValidationError,
     safe_output_file_path,
@@ -85,10 +89,10 @@ def _configure_logging() -> None:
     if logging.getLogger().handlers:
         return
 
-    log_level = get_env_str(ENV_UPLOAD_LOG_LEVEL, DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL
-    retention = get_env_int(
-        ENV_UPLOAD_LOG_RETENTION, DEFAULT_LOG_RETENTION_WEEKS
+    log_level = (
+        get_env_str(ENV_UPLOAD_LOG_LEVEL, DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL
     )
+    retention = get_env_int(ENV_UPLOAD_LOG_RETENTION, DEFAULT_LOG_RETENTION_WEEKS)
     if retention is None or retention < 0:
         retention = DEFAULT_LOG_RETENTION_WEEKS
 
@@ -157,6 +161,9 @@ def main(
 
     try:
         load_project_env()
+        if configure_facebook_token_from_provider():
+            LOGGER.info("Loaded Facebook access token from the configured provider.")
+
         quotes_file = get_env_str(ENV_QUOTES_FILE_PATH, DEFAULT_QUOTES_FILE)
         image_dir = get_env_str(ENV_IMAGE_DIR, str(DEFAULT_IMAGE_DIR))
         max_attempts = get_env_int(ENV_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS)
@@ -222,6 +229,7 @@ def main(
         return 1
     except (
         ConfigurationError,
+        FacebookTokenProviderError,
         QuoteValidationError,
         OSError,
         ValueError,
