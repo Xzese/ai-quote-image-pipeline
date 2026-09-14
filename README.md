@@ -1,5 +1,12 @@
 # AI Quote Image Pipeline
 
+<p align="center">
+  <a href="https://github.com/Xzese/ai-quote-image-pipeline/stargazers"><img src="https://img.shields.io/github/stars/Xzese/ai-quote-image-pipeline?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/Xzese/ai-quote-image-pipeline/commits/main"><img src="https://img.shields.io/github/last-commit/Xzese/ai-quote-image-pipeline?style=flat-square" alt="Last commit"></a>
+  <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
+  <a href="https://github.com/Xzese/ai-quote-image-pipeline"><img src="https://img.shields.io/github/languages/top/Xzese/ai-quote-image-pipeline?style=flat-square" alt="Top language"></a>
+</p>
+
 A local-first Python pipeline for turning quotes into AI-generated social images.
 It uses LM Studio for prompt and hashtag generation, ComfyUI for image rendering,
 and can optionally publish completed images to Instagram.
