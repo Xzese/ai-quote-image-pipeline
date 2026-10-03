@@ -1,243 +1,113 @@
 #!/usr/bin/env python3
-"""Upload a single random quote image with bounded retries."""
+"""Publish one eligible render and report an explicit stage outcome."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import time as dt_time
 import json
 import logging
-import os
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 import random
-from datetime import time as dt_time
-import time
 import sys
-from logging.handlers import TimedRotatingFileHandler
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from quote_image_generator.config import (
-    ConfigurationError,
     get_env_int,
     get_env_str,
     load_project_env,
     resolve_repo_path,
 )
 from quote_image_generator.facebook_token_provider import (
-    FacebookTokenProviderError,
     configure_facebook_token_from_provider,
 )
+from quote_image_generator.publishing_run import PublishingSummary, publish_one
 from quote_image_generator.quote_validation import (
-    QuoteValidationError,
     safe_output_file_path,
     validate_quote_records,
 )
 
-from upload_photo.upload_photo import (
-    create_media_container,
-    publish_media_container,
-    send_email_alert,
-    upload_image,
-)
-
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_RETRY_BASE_SECONDS = 2.0
-DEFAULT_QUOTES_FILE = "quotes.json"
-DEFAULT_IMAGE_DIR = Path("output") / "images_text_overlay"
-ENV_MAX_ATTEMPTS = "UPLOAD_QUOTE_MAX_ATTEMPTS"
-ENV_RETRY_BASE_SECONDS = "UPLOAD_QUOTE_RETRY_BASE_SECONDS"
-ENV_QUOTES_FILE_PATH = "QUOTES_FILE_PATH"
-ENV_IMAGE_DIR = "OVERLAY_OUTPUT_PATH"
-ENV_UPLOAD_LOG_RETENTION = "UPLOAD_QUOTE_LOG_RETENTION_WEEKS"
-ENV_UPLOAD_LOG_LEVEL = "UPLOAD_QUOTE_LOG_LEVEL"
-OUTPUT_IMAGE_WIDTH = 1024
-OUTPUT_IMAGE_HEIGHT = 1024
-OUTPUT_IMAGE_EXT = "jpeg"
-DEFAULT_LOG_FILE = Path("output") / "logs" / "upload_quote_photo.log"
-DEFAULT_LOG_LEVEL = "INFO"
-DEFAULT_LOG_RETENTION_WEEKS = 4
+
+def _post_quote_photo(file_path: str, caption: str):
+    from upload_photo.upload_photo import publish_image
+
+    return publish_image(file_path, caption)
 
 
-def _post_quote_photo(file_path: str, caption: str) -> object:
-    if not os.path.isfile(file_path):
-        raise FileNotFoundError(f"Image file not found: {file_path}")
+def _send_alert(subject, body):
+    from upload_photo.upload_photo import send_email_alert
 
-    upload_url = upload_image(file_path)
-    if not upload_url:
-        raise RuntimeError(f"upload_image returned empty url for {file_path}")
-
-    container_id = create_media_container(upload_url, caption)
-    if not container_id:
-        raise RuntimeError(f"create_media_container returned empty id for {file_path}")
-    if container_id == "No Valid Token":
-        raise RuntimeError("create_media_container returned No Valid Token")
-
-    publish_result = publish_media_container(container_id)
-    if not publish_result:
-        raise RuntimeError(
-            f"publish_media_container returned empty result for {file_path}"
-        )
-    if publish_result == "No Valid Token":
-        raise RuntimeError("publish_media_container returned No Valid Token")
-
-    return publish_result
+    return send_email_alert(subject, body)
 
 
-def _configure_logging() -> None:
+def _configure_logging():
     if logging.getLogger().handlers:
         return
-
-    log_level = (
-        get_env_str(ENV_UPLOAD_LOG_LEVEL, DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL
-    )
-    retention = get_env_int(ENV_UPLOAD_LOG_RETENTION, DEFAULT_LOG_RETENTION_WEEKS)
-    if retention is None or retention < 0:
-        retention = DEFAULT_LOG_RETENTION_WEEKS
-
+    level = get_env_str("UPLOAD_QUOTE_LOG_LEVEL", "INFO")
+    retention = get_env_int("UPLOAD_QUOTE_LOG_RETENTION_WEEKS", 4)
+    if retention is None or retention < 1:
+        raise ValueError("UPLOAD_QUOTE_LOG_RETENTION_WEEKS must be positive.")
     formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s")
-    root_logger = logging.getLogger()
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    logging.getLogger().addHandler(console)
     try:
-        log_file = resolve_repo_path(DEFAULT_LOG_FILE)
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = TimedRotatingFileHandler(
-            log_file,
+        path = resolve_repo_path("output/logs/upload_quote_photo.log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = TimedRotatingFileHandler(
+            path,
             when="W0",
             interval=1,
             backupCount=retention,
             atTime=dt_time(0, 0),
+            encoding="utf-8",
         )
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+        handler.setFormatter(formatter)
+        logging.getLogger().addHandler(handler)
     except OSError:
-        # Fall back to stdout/stderr logging when filesystem is not writable.
         pass
-
-    root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-
-
-def _parse_retry_delay() -> float:
-    raw = get_env_str(ENV_RETRY_BASE_SECONDS, str(DEFAULT_RETRY_BASE_SECONDS))
-    assert raw is not None
-    try:
-        delay = float(raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"{ENV_RETRY_BASE_SECONDS} must be a numeric value, got {raw!r}."
-        ) from exc
-
-    if delay < 0:
-        raise ValueError(f"{ENV_RETRY_BASE_SECONDS} must be non-negative, got {delay}.")
-
-    return delay
+    logging.getLogger().setLevel(getattr(logging, level.upper(), logging.INFO))
 
 
-def _load_quotes(quotes_file: str) -> list[dict]:
-    with open(quotes_file, "r", encoding="utf-8") as json_file:
-        quote_data = json.load(json_file)
-
-    return validate_quote_records(quote_data)
+def _path_for(image_dir, quote_id):
+    return safe_output_file_path(image_dir, quote_id, 1024, 1024, "jpeg")
 
 
-def _load_caption(quote: dict) -> str:
-    caption = quote.get("hashtags", "")
-    return str(caption) if caption is not None else ""
-
-
-def main(
-    *,
-    post_func=_post_quote_photo,
-    alert_func=send_email_alert,
-    sleep_func=time.sleep,
-    randomizer=random,
-) -> int:
-    _configure_logging()
-
+def main(*, post_func=None, alert_func=None, sleep_func=None, randomizer=random):
+    """sleep_func is retained for callers but never used: no post retries."""
     try:
         load_project_env()
-        if configure_facebook_token_from_provider():
-            LOGGER.info("Loaded Facebook access token from the configured provider.")
-
-        quotes_file = get_env_str(ENV_QUOTES_FILE_PATH, DEFAULT_QUOTES_FILE)
-        image_dir = get_env_str(ENV_IMAGE_DIR, str(DEFAULT_IMAGE_DIR))
-        max_attempts = get_env_int(ENV_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS)
-        retry_delay = _parse_retry_delay()
-
-        if quotes_file is None:
-            raise ConfigurationError(f"{ENV_QUOTES_FILE_PATH} is required.")
-        if image_dir is None:
-            raise ConfigurationError(f"{ENV_IMAGE_DIR} is required.")
-        if max_attempts is None:
-            raise ConfigurationError(
-                f"{ENV_MAX_ATTEMPTS} resolved to an invalid value."
-            )
-        if max_attempts < 1:
-            raise ValueError(
-                f"{ENV_MAX_ATTEMPTS} must be at least 1, got {max_attempts}."
-            )
-
-        resolved_quotes_file = resolve_repo_path(quotes_file)
-        resolved_image_dir = resolve_repo_path(image_dir)
-
-        quote_records = _load_quotes(str(resolved_quotes_file))
-        if len(quote_records) < 1:
-            raise ValueError(f"No usable quotes found in {resolved_quotes_file}.")
-
-        quote = randomizer.choice(quote_records)
-        file_path = safe_output_file_path(
-            resolved_image_dir,
-            quote["_id"],
-            OUTPUT_IMAGE_WIDTH,
-            OUTPUT_IMAGE_HEIGHT,
-            OUTPUT_IMAGE_EXT,
+        _configure_logging()
+        quotes_file = get_env_str("QUOTES_FILE_PATH", "quotes.json", required=True)
+        image_dir = get_env_str(
+            "OVERLAY_OUTPUT_PATH", "output/images_text_overlay", required=True
         )
-        caption = _load_caption(quote)
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                post_func(str(file_path), caption)
-                LOGGER.info("Posted quote image successfully.")
-                return 0
-            except Exception as exc:
-                LOGGER.exception(
-                    "Attempt %d/%d failed for %s", attempt, max_attempts, file_path
-                )
-                if attempt >= max_attempts:
-                    LOGGER.error("Posting failed after %d attempt(s).", max_attempts)
-                    try:
-                        alert_func(
-                            "[Instagram AI Image] Posting Failed",
-                            (
-                                f"The following error occurred after {max_attempts} "
-                                f"attempts: {exc}\nFile Path: {file_path}"
-                            ),
-                        )
-                    except Exception:
-                        LOGGER.exception("Failed to send posting-failure email alert.")
-                    return 1
-
-                delay = retry_delay * (2 ** (attempt - 1))
-                LOGGER.info("Retrying in %.2f seconds.", delay)
-                sleep_func(delay)
-
-        return 1
-    except (
-        ConfigurationError,
-        FacebookTokenProviderError,
-        QuoteValidationError,
-        OSError,
-        ValueError,
-        json.JSONDecodeError,
-        TypeError,
-    ):
-        LOGGER.exception("Upload process failed.")
-        return 1
+        with resolve_repo_path(quotes_file).open(encoding="utf-8") as source:
+            records = validate_quote_records(json.load(source))
+        summary = publish_one(
+            records,
+            resolve_repo_path(image_dir),
+            path_for=_path_for,
+            choose=randomizer.choice,
+            post=post_func or _post_quote_photo,
+            prepare=configure_facebook_token_from_provider,
+            alert=alert_func or _send_alert,
+        )
+    except Exception:
+        summary = PublishingSummary("failed")
+    # Reporting failure cannot turn a confirmed post into another post attempt.
+    try:
+        report = json.dumps(asdict(summary), sort_keys=True)
+        print(report)
+        LOGGER.info("Publishing stage: %s", summary.status)
+    except Exception:
+        pass
+    return summary.exit_code
 
 
 if __name__ == "__main__":
