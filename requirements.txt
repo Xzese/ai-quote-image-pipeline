@@ -1,5 +1,6 @@
 Pillow==12.3.0
 requests==2.33.0
-transformers==5.10.4
 openai==1.95.1
 python-dotenv==1.2.2
+filelock==3.32.0
+urllib3==2.8.0

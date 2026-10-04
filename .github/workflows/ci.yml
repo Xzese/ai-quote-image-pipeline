@@ -26,9 +26,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --require-hashes -r requirements-lock.txt
+          python -m pip install --no-deps --no-build-isolation -e .
 
       - name: Compile all python files
-        run: python -m compileall -q .
+        run: python -m compileall -q src tests
 
       - name: Ruff format check
         run: ruff format --check --exclude upload_photo .
@@ -36,7 +37,7 @@ jobs:
       - name: Ruff lint check
         run: ruff check --exclude upload_photo .
 
-      - name: Run tests (services mocked by defaults/env)
+      - name: Run pipeline tests (services mocked by defaults/env)
         env:
           COMFYUI_URL: "http://127.0.0.1:1"
           LM_STUDIO_BASE_URL: "http://127.0.0.1:1/v1"
@@ -45,7 +46,16 @@ jobs:
           LM_STUDIO_PRESET: "@local:no-thinking"
           LM_STUDIO_PARALLEL_WORKERS: "1"
           QUOTES_FILE_PATH: "/tmp/quotes.json"
-        run: pytest -q
+        # Limit collection to this project's tests. The dependency has its own
+        # module root, so run its tests in a separate Python process below.
+        run: python -m pytest -q tests
+
+      - name: Run publishing submodule tests
+        working-directory: upload_photo
+        run: python -m pytest -q tests
+
+      - name: Run deterministic offline demo
+        run: python -m quote_image_generator.pipeline --offline --output output/demo
 
       - name: Dependency vulnerability checks
         run: |

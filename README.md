@@ -8,13 +8,13 @@
 </p>
 
 A local-first Python pipeline for turning quotes into AI-generated social images.
-It uses LM Studio for prompt and hashtag generation, ComfyUI for image rendering,
+It uses LM Studio or Ollama for prompt and hashtag generation, ComfyUI for image rendering,
 and can optionally publish completed images to Instagram.
 
 ## What the pipeline does
 
 1. Pull quote data from Quotable into a local JSON corpus.
-2. Generate prompt text + hashtags through LM Studio for each quote.
+2. Generate prompt text + hashtags through the selected local LLM for each quote.
 3. Render images in ComfyUI and overlay quote text.
 4. Optionally post one generated image via `upload_photo` integration.
 
@@ -44,12 +44,20 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
 python -m pip install --upgrade pip
 python -m pip install --require-hashes -r requirements-lock.txt
+python -m pip install --no-deps --no-build-isolation -e .
 ```
 
 `requirements-lock.txt` pins and hashes the complete root, development, and
 optional upload dependency set for reproducible Python 3.11+ installs. This
 project uses Python's standard-library `smtplib`; no separate SMTP package is
 required.
+
+The second install command registers the local project in editable mode using
+the build tools already pinned in the lockfile. Run it once after cloning or
+updating to the `src` layout. Existing `python -m quote_image_generator...`
+commands then work without setting `PYTHONPATH`. This application runs from its
+checkout: `.env`, assets, workflows, fixtures and outputs resolve relative to the
+repository root, including when a command starts from another directory.
 
 After intentionally changing a requirements file, regenerate the lock:
 
@@ -62,11 +70,15 @@ python -m piptools compile --allow-unsafe --generate-hashes \
 ## Repository layout
 
 ```text
-quote_image_generator/   # Python package and executable modules
+src/
+  quote_image_generator/ # Application package and executable modules
+tests/                   # Application tests
+pyproject.toml           # Editable installation and test discovery
 assets/fonts/            # Bundled Alegreya font
 workflows/               # ComfyUI workflow JSON
+fixtures/                # Authored evaluation corpus
+docs/                    # Workflow contracts and smoke-test instructions
 licenses/                # Third-party licence texts
-tests/                   # Unit tests
 upload_photo/            # Optional Instagram posting submodule
 output/                  # Generated local data, ignored by Git
 ```
@@ -84,13 +96,15 @@ cp .env.example .env
 QUOTES_FILE_PATH=output/quotes.json
 OUTPUT_IMAGE_PATH=output/images
 OVERLAY_OUTPUT_PATH=output/images_text_overlay
-UPLOAD_QUOTE_MAX_ATTEMPTS=3
-UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
+PIPELINE_MODE=batch
+PIPELINE_FETCH_QUOTES=true
+QUOTES_ENDPOINT_URL=http://api.quotable.io/quotes
 ```
 
 ### LM Studio configuration
 
 ```ini
+LLM_PROVIDER=lm_studio
 LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
 LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=qwen/qwen3.5-9b
@@ -99,21 +113,48 @@ LM_STUDIO_MODEL=qwen/qwen3.5-9b
 LM_STUDIO_PRESET=
 LM_STUDIO_NATIVE_API_BASE_URL=
 LM_STUDIO_CONTEXT_LENGTH=8192
-LM_STUDIO_PARALLEL_WORKERS=4
 ```
+
+### Ollama configuration
+
+Start Ollama and install a chat model, for example `ollama pull qwen3:0.6b`.
+Then select it in `.env`:
+
+```ini
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3:0.6b
+OLLAMA_CONTEXT_LENGTH=8192
+```
+
+The same pipeline and stage commands work with either provider. Ollama uses its
+native [structured-output API](https://docs.ollama.com/capabilities/structured-outputs)
+for the readiness check, visual prompts and hashtags. The model must already be
+installed and support chat/completion; embedding models are rejected. Thinking is
+disabled for models that advertise that capability. Requests have a bounded
+timeout and support cancellation. There is no automatic provider fallback or
+model download. In batch mode, the pipeline checks Ollama's running models before
+generation and unloads its newly loaded model before rendering. Pre-existing
+loaded models remain untouched. Per-quote mode uses a five-minute keep-alive.
 
 ### ComfyUI configuration
 
 ```ini
 COMFYUI_URL=http://127.0.0.1:8000
 COMFYUI_WORKFLOW_PATH=workflows/image_z_image_turbo.json
-COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=false
+COMFYUI_DEADLINE_SECONDS=300
+COMFYUI_WIDTH=1024
+COMFYUI_HEIGHT=1024
+COMFYUI_STEPS=10
+COMFYUI_CFG=1
+GENERATION_SEED=42
 ```
 
 ### Optional publishing configuration
 
 ```ini
 # Optional Instagram posting
+GRAPH_API_VERSION=
 ACCESS_TOKEN=
 ACCESS_TOKEN_EXPIRY=
 IG_BUSINESS_USER_ID=
@@ -139,10 +180,10 @@ SENDER_PASSWORD=
 RECIPIENT_EMAIL=
 ```
 
-The retry values apply to one run of the posting module.
-Posting credentials are optional unless you run the posting module. After the
-final failed posting attempt, the script uses the SMTP settings above to send one
-failure alert.
+Posting credentials are optional unless you request publishing. Publication is
+attempted once; an unconfirmed outcome is stored durably and requires operator
+reconciliation. Optional SMTP settings send a redacted notification. See the
+[workflow contracts and recovery guide](docs/workflow.md).
 
 #### Remote Facebook token provider
 
@@ -210,7 +251,7 @@ setting and the model-reported maximum context length.
 
 ## ComfyUI
 
-[ComfyUI](https://comfy.org/) renders the image workflow after LM Studio has
+[ComfyUI](https://comfy.org/) renders the image workflow after the selected LLM has
 generated the visual prompt. Use the
 [official ComfyUI documentation](https://docs.comfy.org/) for installation and
 local API guidance, and the
@@ -227,42 +268,74 @@ for an explanation of node-based workflows.
    `workflows/image_z_image_turbo.json`, or provide another API-format workflow.
 5. Run `python -m quote_image_generator.get_image`.
 
-The default prompt seed behavior is controlled in the script. Keep the defaults
-unless you intentionally want to change image reproducibility. This project
-uses a local ComfyUI API rather than the ComfyUI Cloud API.
+`GENERATION_SEED` defaults to `42` and is recorded with the actual workflow and
+model filenames. `COMFYUI_DEADLINE_SECONDS` bounds submission, polling and download
+for each image. The project uses the local ComfyUI API.
+
+For a smaller smoke test, `workflows/image_sd15.json` uses separate fp16 Stable
+Diffusion 1.5 components and standard ComfyUI nodes. Set width/height to `512`,
+steps to `10` and CFG to `7`. Dimensions must be positive multiples of eight;
+CFG accepts decimals. See [the live smoke-test setup and results](docs/live-smoke-test.md)
+for the model filenames, download commands and tested versions. A small LLM and
+ten diffusion steps are suitable for checking connectivity, not assessing final
+quote relevance or publication quality.
 
 ## Run order
 
-1. Pull base quotes:
+Start the complete workflow with one command:
 
-   ```bash
-   python -m quote_image_generator.get_quotes
-   ```
+```bash
+python -m quote_image_generator.pipeline
+```
 
-2. Generate prompt/hashtags:
+By default, `PIPELINE_MODE=batch` refreshes the quote corpus, generates prompts
+and hashtags for **all quotes**, releases the text model loaded by this run, then
+renders and overlays **all images**. Work remains sequential within each stage.
 
-   ```bash
-   python -m quote_image_generator.get_prompt
-   ```
-
-3. Generate images + overlay:
-
-   ```bash
-   python -m quote_image_generator.get_image
-   ```
-
-4. Optional one-post upload (bounded by one run):
-
-   ```bash
-   python -m quote_image_generator.upload_quote_photo
-   ```
-
-Upload retry controls are set in `.env`:
+To generate a prompt and image for each quote before moving to the next, set:
 
 ```ini
-UPLOAD_QUOTE_MAX_ATTEMPTS=3
-UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
+PIPELINE_MODE=per_quote
 ```
+
+You can also override it for one run with `--mode per_quote` or `--mode batch`.
+Both modes fetch quotes first. An unchanged quote retains its generated prompt
+and hashtags on refresh, so matching receipts continue to skip completed work.
+Quotes no longer returned by the source remain in the corpus with their generated
+fields. Existing order is preserved, matching IDs are updated, and new IDs are
+appended. A refresh never removes saved quotes, including when the source returns
+an empty list.
+Fetch failures leave the saved corpus intact and stop generation.
+
+Use `--skip-fetch` or `PIPELINE_FETCH_QUOTES=false` to use an existing corpus,
+including custom quotes or a test sample:
+
+```bash
+python -m quote_image_generator.pipeline --skip-fetch
+```
+
+The individual `get_prompt`, `get_image`, and `upload_quote_photo` entry points
+remain available, as does `get_quotes` for a standalone refresh. Explicit
+`--stage prompt`, `--stage render` and `--stage publish` use the saved corpus and
+never fetch quotes. They use the same receipts and locks. Review completed images
+before running the optional publishing stage:
+
+```bash
+python -m quote_image_generator.pipeline --stage publish
+```
+
+Try the complete fixture-backed workflow without services or credentials:
+
+```bash
+python -m quote_image_generator.pipeline --offline --output output/demo
+```
+
+The runner emits a JSON summary and saves durable stage receipts beside the
+quote corpus. Completed stages are reused only while their inputs and artefacts
+match. Partial success exits nonzero while retaining successful work. Existing
+images without receipts must be regenerated. Read the
+[workflow and evaluation guide](docs/workflow.md) for exit codes, reproducibility
+metadata, the fixed evaluation corpus, deadline behaviour and recovery commands.
 
 ## Quote schema
 
@@ -295,6 +368,8 @@ Default release output (from the `.env` defaults):
 ```text
 output/
 ├── quotes.json                 # updated quote dataset
+├── quotes.json.state.json      # durable receipts and publication journal
+├── quotes.json.summary.json    # latest measurable run summary
 ├── images/                     # ComfyUI base render output
 │   └── <_id>1024x1024.png
 └── images_text_overlay/        # final images with quote overlay
@@ -303,15 +378,10 @@ output/
 
 ## Cancel behavior
 
-### Prompt generation
-
-- Interrupting once triggers graceful shutdown and waits for running workers.
-- Interrupting twice exits immediately.
-
-### Image generation
-
-- Interrupt request normally cancels work associated with this run (owned jobs).
-- Set `COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=true` only if you explicitly want a full queue clear instead of owned-job cancellation.
+SIGINT and SIGTERM stop new work and preserve completed receipts. ComfyUI
+requests are terminated within their wall-clock deadline. Cleanup deletes only
+the known job owned by this run; it never interrupts the global server queue.
+LM Studio calls already in progress keep their configured request timeout.
 
 ## Troubleshooting
 
@@ -346,8 +416,9 @@ output/
   - `python -m quote_image_generator.get_image`
   - `python -m quote_image_generator.upload_quote_photo` (single-post path)
   - `python -m quote_image_generator.sort_json [quotes-file]`
-- Project test discovery:
-  - `python -m pytest`
+- Pipeline tests: `python -m pytest -q tests`.
+- Publishing submodule tests: `(cd upload_photo && python -m pytest -q tests)`.
+- Keep the suites in separate Python processes so their module roots do not collide.
 
 ## Governance
 

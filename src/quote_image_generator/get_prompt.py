@@ -7,7 +7,6 @@ import re
 import signal
 import threading
 import sys
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -29,10 +28,8 @@ from quote_image_generator.quote_validation import (
     QuoteValidationError,
     validate_quote_records,
 )
-from transformers import AutoTokenizer
 
 
-RESET_PROMPTS_AND_HASHTAGS = False
 MAX_PROMPT_RETRIES = 5
 MAX_HASHTAG_RETRIES = 5
 MAX_PROMPT_TOKENS = 50
@@ -51,7 +48,7 @@ DEFAULT_LM_STUDIO_MODEL = "qwen/qwen3.5-9b"
 DEFAULT_LM_STUDIO_PRESET = ""
 DEFAULT_LM_STUDIO_CONTEXT_LENGTH = 8192
 DEFAULT_PARALLEL_WORKERS = 4
-DEFAULT_TOKENIZER_NAME = "bert-base-uncased"
+DEFAULT_TOKENIZER_NAME = "whitespace-words-v1"
 
 HASHTAG_TOKEN_RE = re.compile(r"^#[A-Za-z0-9_]+$")
 
@@ -107,7 +104,6 @@ HASHTAGS_RESPONSE_FORMAT = {
     },
 }
 
-file_lock = threading.Lock()
 print_lock = threading.Lock()
 
 stop_event = threading.Event()
@@ -117,7 +113,7 @@ _signal_handlers_installed = False
 
 def log(message: str) -> None:
     with print_lock:
-        print(message, flush=True)
+        print(message, flush=True, file=sys.stderr)
 
 
 def handle_sigint(signum, frame):
@@ -147,8 +143,17 @@ def create_openai_client(base_url: str, api_key: str) -> OpenAI:
     return OpenAI(base_url=base_url, api_key=api_key)
 
 
-def create_tokenizer(tokenizer_name: str = DEFAULT_TOKENIZER_NAME) -> AutoTokenizer:
-    return AutoTokenizer.from_pretrained(tokenizer_name)
+class WordCounter:
+    """A reproducible length rule; these are words, not model tokens."""
+
+    def tokenize(self, text):
+        return text.split()
+
+
+def create_tokenizer(tokenizer_name: str = DEFAULT_TOKENIZER_NAME) -> WordCounter:
+    if tokenizer_name != DEFAULT_TOKENIZER_NAME:
+        raise ConfigurationError("Only whitespace-words-v1 is supported.")
+    return WordCounter()
 
 
 def is_blank(value):
@@ -167,6 +172,28 @@ def derive_native_api_base_url(openai_base_url: str) -> str:
 
 def _load_prompt_settings():
     load_project_env()
+
+    provider = get_env_str("LLM_PROVIDER", "lm_studio")
+    if provider not in ("lm_studio", "ollama"):
+        raise ConfigurationError("LLM_PROVIDER must be lm_studio or ollama.")
+    if provider == "ollama":
+        context_length = get_env_int("OLLAMA_CONTEXT_LENGTH", 8192)
+        if context_length is None or context_length < 1:
+            raise ConfigurationError("OLLAMA_CONTEXT_LENGTH must be at least 1.")
+        base_url = get_env_str("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        model_name = get_env_str("OLLAMA_MODEL", "qwen3:0.6b")
+        if not base_url or not model_name:
+            raise ConfigurationError(
+                "OLLAMA_BASE_URL and OLLAMA_MODEL cannot be blank."
+            )
+        return {
+            "provider": provider,
+            "base_url": base_url.rstrip("/"),
+            "model_name": model_name,
+            "preset": "",
+            "context_length": context_length,
+            "quotes_file_path": get_required_file_path("QUOTES_FILE_PATH"),
+        }
 
     base_url = get_env_str("LM_STUDIO_BASE_URL", default=DEFAULT_LM_STUDIO_BASE_URL)
     native_api_base_url = get_env_str("LM_STUDIO_NATIVE_API_BASE_URL")
@@ -208,6 +235,7 @@ def _load_prompt_settings():
         raise ConfigurationError("LM_STUDIO_PARALLEL_WORKERS must be at least 1.")
 
     return {
+        "provider": provider,
         "base_url": base_url,
         "native_api_base_url": native_api_base_url.rstrip("/"),
         "api_key": api_key,
@@ -496,7 +524,14 @@ def ensure_lm_studio_model(
     model_name: str,
     context_length: int,
     session=None,
+    on_load=None,
 ) -> str | None:
+    def load_owned(**kwargs):
+        instance = _load_lm_studio_model(**kwargs)
+        if on_load is not None:
+            on_load(instance)
+        return instance
+
     session = session or requests.Session()
     normalized_model_name = _normalize_model_name(model_name)
 
@@ -555,7 +590,7 @@ def ensure_lm_studio_model(
             log(
                 f"LM Studio model {normalized_model_name!r} not yet visible in model list after download; attempting direct load."
             )
-            return _load_lm_studio_model(
+            return load_owned(
                 session=session,
                 native_api_base_url=native_api_base_url,
                 api_key=api_key,
@@ -591,7 +626,7 @@ def ensure_lm_studio_model(
         )
 
     load_context_length = min(context_length, max_context_length)
-    return _load_lm_studio_model(
+    return load_owned(
         session=session,
         native_api_base_url=native_api_base_url,
         api_key=api_key,
@@ -623,6 +658,8 @@ def _unload_lm_studio_model(
 
 
 def _validate_lm_studio_readiness(*, client, model_name: str, preset: str) -> None:
+    # Retain the old helper name for callers; both providers use the same probe.
+    provider = getattr(type(client), "provider_name", "LM Studio")
     normalized_model_name = _normalize_model_name(model_name)
     attempt = 0
     while attempt < MODEL_READINESS_RETRY_ATTEMPTS:
@@ -644,14 +681,16 @@ def _validate_lm_studio_readiness(*, client, model_name: str, preset: str) -> No
                 expected_type=str,
             )
             break
+        except InterruptedError:
+            raise
         except Exception as exc:
             if not is_stale_lm_studio_readiness_error(exc):
                 raise RuntimeError(
-                    f"LM Studio model/structured-output check failed: {exc}"
+                    f"{provider} model/structured-output check failed: {exc}"
                 ) from exc
             if attempt >= MODEL_READINESS_RETRY_ATTEMPTS:
                 raise RuntimeError(
-                    f"LM Studio model/structured-output check failed: {exc}"
+                    f"{provider} model/structured-output check failed: {exc}"
                 ) from exc
             if stop_event.wait(MODEL_READINESS_RETRY_DELAY_SECONDS):
                 raise InterruptedError(
@@ -660,16 +699,8 @@ def _validate_lm_studio_readiness(*, client, model_name: str, preset: str) -> No
 
     if startup_response["status"] != "ok":
         raise RuntimeError(
-            "LM Studio structured-output check returned an invalid readiness status."
+            f"{provider} structured-output check returned an invalid readiness status."
         )
-
-
-def save_json(data, quotes_file_path) -> None:
-    with file_lock:
-        tmp_path = f"{quotes_file_path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as json_file:
-            json.dump(data, json_file, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, quotes_file_path)
 
 
 def call_model(
@@ -684,6 +715,19 @@ def call_model(
 ) -> dict:
     if stop_event.is_set():
         raise InterruptedError("Shutdown requested before model call")
+
+    if getattr(type(client), "call_structured", None) is not None:
+        try:
+            content = client.call_structured(
+                messages=messages, model=model_name, response_format=response_format
+            )
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            raise RuntimeError("Ollama structured request failed.") from exc
+        return _parse_structured_content(
+            content, expected_field, expected_type, "Ollama"
+        )
 
     try:
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
@@ -721,22 +765,28 @@ def call_model(
         raise RuntimeError("LM Studio response is missing choices.")
 
     content = getattr(choices[0].message, "content", None)
+    return _parse_structured_content(
+        content, expected_field, expected_type, "LM Studio"
+    )
+
+
+def _parse_structured_content(content, expected_field, expected_type, provider):
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("LM Studio response content is empty.")
+        raise RuntimeError(f"{provider} response content is empty.")
 
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("LM Studio response content is not valid JSON.") from exc
+        raise RuntimeError(f"{provider} response content is not valid JSON.") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("LM Studio structured response must be a JSON object.")
+        raise RuntimeError(f"{provider} structured response must be a JSON object.")
     if expected_field not in parsed:
         raise RuntimeError(
-            f"LM Studio structured response is missing {expected_field!r}."
+            f"{provider} structured response is missing {expected_field!r}."
         )
     if not isinstance(parsed[expected_field], expected_type):
         raise RuntimeError(
-            f"LM Studio structured response field {expected_field!r} has the wrong type."
+            f"{provider} structured response field {expected_field!r} has the wrong type."
         )
 
     return parsed
@@ -770,7 +820,7 @@ def generate_prompt(
             "the tone of the following quote. Do not mention the author. Do not mention "
             "text overlays. Do not include any people. Return only the prompt text, one "
             "short line, no markdown, and no extra explanation.\n"
-            f"The prompt must be at or below {MAX_PROMPT_TOKENS} tokens.\n"
+            f"The prompt must be at or below {MAX_PROMPT_TOKENS} whitespace-separated words.\n"
             f'Quote: "{item["content"]}"\n'
             f'Author: "{item["author"]}"'
         )
@@ -784,7 +834,7 @@ def generate_prompt(
                             "You create concise image prompts using the requested structured output. "
                             "The prompt value must contain one short line. "
                             "Example prompt value: misty pine forest at dawn, soft light, calm atmosphere. "
-                            "No explanations, markdown, or people. Maximum 50 tokens."
+                            "No explanations, markdown, or people. Maximum 50 whitespace-separated words."
                         ),
                     },
                     {"role": "user", "content": chat_message},
@@ -796,6 +846,8 @@ def generate_prompt(
                 expected_field="prompt",
                 expected_type=str,
             )
+        except InterruptedError:
+            raise
         except Exception as error:
             log(
                 f"Item {item_index}, prompt attempt {attempt}: model call failed: {error}"
@@ -812,13 +864,20 @@ def generate_prompt(
 
         try:
             number_of_tokens = len(tokenizer.tokenize(prompt))
+        except InterruptedError:
+            raise
         except Exception as error:
             log(
                 f"Item {item_index}, prompt attempt {attempt}: tokenization failed: {error}"
             )
             continue
 
-        if number_of_tokens <= MAX_PROMPT_TOKENS and '"' not in prompt:
+        if (
+            number_of_tokens <= MAX_PROMPT_TOKENS
+            and '"' not in prompt
+            and "\n" not in prompt
+            and "\r" not in prompt
+        ):
             return prompt
         contains_double_quote = '"' in prompt
 
@@ -865,6 +924,8 @@ def generate_hashtags(item, item_index, *, client, model_name: str, preset: str)
                 expected_field="hashtags",
                 expected_type=list,
             )
+        except InterruptedError:
+            raise
         except Exception as error:
             log(
                 f"Item {item_index}, hashtag attempt {attempt}: model call failed: {error}"
@@ -890,234 +951,10 @@ def generate_hashtags(item, item_index, *, client, model_name: str, preset: str)
     return None
 
 
-def process_item(
-    index,
-    quote_data,
-    quotes_file_path,
-    *,
-    client,
-    tokenizer,
-    model_name: str,
-    preset: str,
-):
-    if stop_event.is_set():
-        return index, False
-
-    item = quote_data[index]
-    changed = False
-
-    log(f"Generating for Item {index}")
-
-    if ("prompt" not in item or is_blank(item["prompt"])) and not stop_event.is_set():
-        try:
-            prompt = generate_prompt(
-                item,
-                index,
-                client=client,
-                tokenizer=tokenizer,
-                model_name=model_name,
-                preset=preset,
-            )
-        except Exception as error:
-            log(f"Item {index}: prompt generation raised unexpected error: {error}")
-            prompt = None
-
-        if prompt:
-            item["prompt"] = prompt
-            changed = True
-            log(f"Prompt Accepted for Item {index}: {prompt}")
-        elif not stop_event.is_set():
-            log(
-                f"Prompt generation failed for Item {index} after {MAX_PROMPT_RETRIES} attempts"
-            )
-
-    if (
-        "hashtags" not in item or is_blank(item["hashtags"])
-    ) and not stop_event.is_set():
-        try:
-            hashtags = generate_hashtags(
-                item, index, client=client, model_name=model_name, preset=preset
-            )
-        except Exception as error:
-            log(f"Item {index}: hashtag generation raised unexpected error: {error}")
-            hashtags = None
-
-        if hashtags:
-            item["hashtags"] = hashtags
-            changed = True
-            log(f"Hashtags Accepted for Item {index}: {hashtags}")
-        elif not stop_event.is_set():
-            log(
-                f"Hashtag generation failed for Item {index} after {MAX_HASHTAG_RETRIES} attempts"
-            )
-
-    if changed:
-        try:
-            save_json(quote_data, quotes_file_path)
-        except Exception as error:
-            log(f"Item {index}: failed to persist JSON after update: {error}")
-            raise
-
-    return index, changed
-
-
 def main() -> int:
-    stop_event.clear()
-    force_exit_event.clear()
-    install_signal_handlers()
-    managed_instance_id = None
-    settings = None
-    executor = None
-    quote_data = []
+    from quote_image_generator.pipeline import main as workflow_main
 
-    try:
-        try:
-            settings = _load_prompt_settings()
-            quote_data = _load_quote_data(settings["quotes_file_path"])
-            managed_instance_id = ensure_lm_studio_model(
-                native_api_base_url=settings["native_api_base_url"],
-                api_key=settings["api_key"],
-                model_name=settings["model_name"],
-                context_length=settings["context_length"],
-            )
-            client = create_openai_client(settings["base_url"], settings["api_key"])
-            _validate_lm_studio_readiness(
-                client=client,
-                model_name=settings["model_name"],
-                preset=settings["preset"],
-            )
-            tokenizer = create_tokenizer()
-        except ConfigurationError as exc:
-            log(f"Configuration error: {exc}")
-            return 1
-        except ValueError as exc:
-            log(f"Input error: {exc}")
-            return 1
-        except InterruptedError:
-            log("Startup cancelled. No quote items were processed.")
-            return 130
-        except RuntimeError as exc:
-            log(f"LM Studio error: {exc}")
-            return 1
-        except Exception as exc:
-            log(f"Failed to initialize runtime dependencies: {exc}")
-            return 1
-
-        executor = ThreadPoolExecutor(max_workers=settings["parallel_workers"])
-        futures = {}
-
-        if RESET_PROMPTS_AND_HASHTAGS:
-            log("RESET_PROMPTS_AND_HASHTAGS is True. Clearing prompts and hashtags...")
-            for item in quote_data:
-                if "prompt" in item:
-                    item["prompt"] = ""
-                if "hashtags" in item:
-                    item["hashtags"] = ""
-
-            try:
-                save_json(quote_data, settings["quotes_file_path"])
-            except Exception as exc:
-                log(f"Failed to clear prompts and hashtags: {exc}")
-                return 1
-
-            log("Reset complete.")
-
-        for i in range(len(quote_data)):
-            if stop_event.is_set():
-                break
-            future = executor.submit(
-                process_item,
-                i,
-                quote_data,
-                settings["quotes_file_path"],
-                client=client,
-                tokenizer=tokenizer,
-                model_name=settings["model_name"],
-                preset=settings["preset"],
-            )
-            futures[future] = i
-
-        pending = set(futures.keys())
-
-        pending_cancel_logged = False
-
-        while pending:
-            if force_exit_event.is_set():
-                break
-
-            if stop_event.is_set() and not force_exit_event.is_set():
-                if not pending_cancel_logged:
-                    cancelled_count = 0
-                    for future in list(pending):
-                        if future.cancel():
-                            cancelled_count += 1
-                            pending.remove(future)
-
-                    if cancelled_count:
-                        if cancelled_count == 1:
-                            log("1 pending item has been cancelled.")
-                        else:
-                            log(f"{cancelled_count} pending items have been cancelled.")
-                    pending_cancel_logged = True
-
-            if force_exit_event.is_set():
-                break
-
-            done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
-
-            for future in done:
-                index = futures[future]
-                if stop_event.is_set():
-                    try:
-                        future.result()
-                    except InterruptedError:
-                        pass
-                    except Exception as error:
-                        log(f"An error occurred in Item {index}: {error}")
-                    continue
-
-                try:
-                    item_index, changed = future.result()
-                    log(f"Finished Item {item_index} (changed={changed})")
-                except InterruptedError:
-                    log(f"Stopped Item {index} due to shutdown request")
-                except Exception as error:
-                    log(f"An error occurred in Item {index}: {error}")
-
-        if force_exit_event.is_set():
-            log("Immediate shutdown complete.")
-            log("Skipping final save due to forced shutdown.")
-            return 130
-
-        try:
-            save_json(quote_data, settings["quotes_file_path"])
-        except Exception as exc:
-            log(f"Final save failed: {exc}")
-            return 1
-
-        if stop_event.is_set():
-            log("Graceful shutdown complete.")
-        else:
-            log("All done.")
-
-        return 0
-    except InterruptedError:
-        log("Startup cancelled. No quote items were processed.")
-        return 130
-    finally:
-        if executor is not None:
-            executor.shutdown(wait=not force_exit_event.is_set(), cancel_futures=True)
-
-        if managed_instance_id and settings:
-            try:
-                _unload_lm_studio_model(
-                    session=requests.Session(),
-                    native_api_base_url=settings["native_api_base_url"],
-                    api_key=settings["api_key"],
-                    instance_id=managed_instance_id,
-                )
-            except Exception as exc:
-                log(f"LM Studio model unload warning: {exc}")
+    return workflow_main(["--stage", "prompt"])
 
 
 if __name__ == "__main__":

@@ -1,340 +1,157 @@
-from __future__ import annotations
+"""Publishing stage tests. External effects are injected test doubles."""
 
-import importlib
-import json
-import sys
-import types
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+from quote_image_generator.publishing_run import publish_one
+from quote_image_generator.run_state import StateStore, file_digest
+from quote_image_generator.pipeline import prompt_output, render_input
 
 
-class _FakeRandom:
-    def __init__(self, value):
-        self.value = value
-
-    def choice(self, _sequence):
-        return self.value
-
-
-class _FailingPost:
-    def __init__(self):
-        self.calls = 0
-
-    def __call__(self, _path, _caption):
-        self.calls += 1
-        raise RuntimeError("forced post failure")
-
-
-def _import_upload_quote_photo(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    upload_image_fn=None,
-    create_media_container_fn=None,
-    publish_media_container_fn=None,
-    send_email_alert_fn=None,
-):
-    fake_upload_photo_pkg = types.ModuleType("upload_photo")
-    fake_upload_photo = types.ModuleType("upload_photo.upload_photo")
-    fake_upload_photo.upload_image = upload_image_fn or (lambda *_args, **_kwargs: None)
-    fake_upload_photo.create_media_container = create_media_container_fn or (
-        lambda *_args, **_kwargs: None
-    )
-    fake_upload_photo.publish_media_container = publish_media_container_fn or (
-        lambda *_args, **_kwargs: None
-    )
-    fake_upload_photo.send_email_alert = send_email_alert_fn or (
-        lambda *_args, **_kwargs: None
-    )
-
-    monkeypatch.setitem(sys.modules, "upload_photo", fake_upload_photo_pkg)
-    monkeypatch.setitem(sys.modules, "upload_photo.upload_photo", fake_upload_photo)
-
-    module_name = "quote_image_generator.upload_quote_photo"
-    sys.modules.pop(module_name, None)
-    return importlib.import_module(module_name)
-
-
-def _write_quotes(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [
-        {"_id": "q001", "content": "quote", "author": "Author", "hashtags": "#quote"},
+def run(tmp_path, records, *, post=None, prepare=None, alert=None, choose=None):
+    records = [
+        dict(r, content=r.get("content", "Quote"), author=r.get("author", "Author"))
+        for r in records
     ]
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def _set_upload_env(
-    monkeypatch, quotes_file, image_dir, max_attempts=3, retry_base="2.0"
-):
-    monkeypatch.setenv("QUOTES_FILE_PATH", str(quotes_file))
-    monkeypatch.setenv("OVERLAY_OUTPUT_PATH", str(image_dir))
-    monkeypatch.setenv("UPLOAD_QUOTE_MAX_ATTEMPTS", str(max_attempts))
-    monkeypatch.setenv("UPLOAD_QUOTE_RETRY_BASE_SECONDS", str(retry_base))
-
-
-def test_main_posts_with_retry_backoff_and_returns_failure_after_max_attempts(
-    monkeypatch, tmp_path
-):
-    quotes_file = tmp_path / "quotes.json"
-    output_dir = tmp_path / "output"
-    _write_quotes(quotes_file)
-    _set_upload_env(
-        monkeypatch, quotes_file, output_dir, max_attempts=4, retry_base="2"
-    )
-
-    fake_post = _FailingPost()
-    sleeps: list[float] = []
-    alerts: list[tuple[str, str]] = []
-    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
-
-    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
-    result = upload_quote_photo.main(
-        post_func=fake_post,
-        alert_func=lambda subject, body: alerts.append((subject, body)),
-        sleep_func=lambda delay: sleeps.append(delay),
-        randomizer=_FakeRandom(
-            {
-                "_id": "q001",
-                "content": "quote",
-                "author": "Author",
-                "hashtags": "#quote",
+    store = StateStore(tmp_path / "corpus.json")
+    for record in records:
+        path = tmp_path / f"{record['_id']}1024x1024.jpeg"
+        if path.is_file():
+            item = store.item(record)
+            item["prompt"] = {"status": "completed", "output": prompt_output(record)}
+            item["render"] = {
+                "input": render_input(record, item, {}),
+                "status": "completed",
+                "path": str(path),
+                "sha256": file_digest(path),
             }
-        ),
+    return publish_one(
+        records,
+        tmp_path,
+        path_for=lambda root, id: root / f"{id}1024x1024.jpeg",
+        choose=choose or (lambda items: items[0]),
+        post=post or Mock(return_value={"id": "confirmed"}),
+        prepare=prepare or Mock(),
+        alert=alert or Mock(),
+        store=store,
     )
 
-    assert result == 1
-    assert fake_post.calls == 4
-    assert sleeps == [2, 4, 8]
-    assert len(alerts) == 1
-    assert alerts[0][0] == "[Instagram AI Image] Posting Failed"
-    assert "after 4 attempts: forced post failure" in alerts[0][1]
-    assert "q0011024x1024.jpeg" in alerts[0][1]
+
+def render(tmp_path, id="q001", content=b"fixture"):
+    (tmp_path / f"{id}1024x1024.jpeg").write_bytes(content)
+    return {"_id": id, "content": "Quote", "author": "Author", "hashtags": "#quote"}
 
 
-def test_main_returns_zero_immediately_after_success(monkeypatch, tmp_path):
-    quotes_file = tmp_path / "quotes.json"
-    output_dir = tmp_path / "output"
-    _write_quotes(quotes_file)
-    _set_upload_env(
-        monkeypatch, quotes_file, output_dir, max_attempts=3, retry_base="3"
+def test_only_existing_renders_are_selected(tmp_path):
+    present = render(tmp_path)
+    missing = {"_id": "missing"}
+    choose = Mock(side_effect=lambda items: items[0])
+    result = run(tmp_path, [missing, present], choose=choose)
+    assert result.status == "published" and result.excluded == 1
+    assert len(choose.call_args.args[0]) == 1
+
+
+def test_missing_images_skip_without_requesting_token(tmp_path):
+    prepare, post = Mock(), Mock()
+    result = run(tmp_path, [{"_id": "missing"}], prepare=prepare, post=post)
+    assert result.status == "skipped" and result.exit_code == 0
+    prepare.assert_not_called()
+    post.assert_not_called()
+
+
+def test_empty_image_is_not_eligible(tmp_path):
+    assert run(tmp_path, [render(tmp_path, content=b"")]).status == "skipped"
+
+
+def test_uncertain_post_is_never_retried(tmp_path):
+    post = Mock(side_effect=TimeoutError("potentially sensitive URL"))
+    alert = Mock()
+    result = run(tmp_path, [render(tmp_path)], post=post, alert=alert)
+    assert result.status == "unknown" and result.exit_code == 1
+    post.assert_called_once()
+    alert.assert_called_once()
+    assert "sensitive" not in alert.call_args.args[1]
+
+
+@pytest.mark.parametrize("response", [None, {}, {"id": ""}, {"id": 1}])
+def test_missing_confirmation_is_not_success(tmp_path, response):
+    post = Mock(return_value=response)
+    assert run(tmp_path, [render(tmp_path)], post=post).status == "unknown"
+    post.assert_called_once()
+
+
+def test_typed_publisher_result_is_supported(tmp_path):
+    result = run(
+        tmp_path,
+        [render(tmp_path)],
+        post=Mock(return_value=SimpleNamespace(media_id="confirmed")),
     )
+    assert result.status == "published" and result.media_id == "confirmed"
 
-    posts: list[tuple[str, str]] = []
-    alerts: list[tuple[str, str]] = []
 
-    def post_once(_path, caption):
-        posts.append((_path, caption))
-        return None
-
-    sleeps: list[float] = []
-    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
-    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
-    result = upload_quote_photo.main(
-        post_func=post_once,
-        alert_func=lambda subject, body: alerts.append((subject, body)),
-        sleep_func=lambda delay: sleeps.append(delay),
-        randomizer=_FakeRandom(
-            {
-                "_id": "q001",
-                "content": "quote",
-                "author": "Author",
-                "hashtags": "#quote",
-            }
-        ),
+def test_token_provider_failure_prevents_publication(tmp_path):
+    post = Mock()
+    result = run(
+        tmp_path,
+        [render(tmp_path)],
+        prepare=Mock(side_effect=RuntimeError()),
+        post=post,
     )
-
-    assert result == 0
-    assert len(posts) == 1
-    assert sleeps == []
-    assert alerts == []
-    assert posts[0][1] == "#quote"
+    assert result.status == "failed"
+    post.assert_not_called()
 
 
-def test_main_calls_facebook_token_provider_once_before_success(monkeypatch, tmp_path):
-    quotes_file = tmp_path / "quotes.json"
-    output_dir = tmp_path / "output"
-    _write_quotes(quotes_file)
-    _set_upload_env(monkeypatch, quotes_file, output_dir)
-    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
-    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
-
-    events: list[str] = []
-
-    def provider_success():
-        events.append("provider")
-        return True
-
-    monkeypatch.setattr(
-        upload_quote_photo,
-        "configure_facebook_token_from_provider",
-        provider_success,
+def test_notification_failure_does_not_repeat_publication(tmp_path):
+    post = Mock(side_effect=TimeoutError())
+    result = run(
+        tmp_path, [render(tmp_path)], post=post, alert=Mock(side_effect=OSError())
     )
+    assert result.status == "unknown"
+    post.assert_called_once()
 
-    def post_once(_path, caption):
-        events.append("post")
-        return None
 
-    result = upload_quote_photo.main(
-        post_func=post_once,
-        alert_func=lambda *_args, **_kwargs: None,
-        sleep_func=lambda *_args, **_kwargs: None,
-        randomizer=_FakeRandom(
-            {
-                "_id": "q001",
-                "content": "quote",
-                "author": "Author",
-                "hashtags": "#quote",
-            }
-        ),
+def test_prepare_precedes_one_publication(tmp_path):
+    events = []
+
+    def post(path, caption):
+        events.append(("post", caption))
+        return {"id": "confirmed"}
+
+    result = run(
+        tmp_path,
+        [render(tmp_path)],
+        prepare=lambda: events.append("prepare"),
+        post=post,
     )
+    assert result.exit_code == 0
+    assert events == ["prepare", ("post", "#quote")]
 
-    assert result == 0
-    assert events == ["provider", "post"]
 
-
-def test_main_returns_failure_when_provider_raises_without_post(monkeypatch, tmp_path):
-    quotes_file = tmp_path / "quotes.json"
-    output_dir = tmp_path / "output"
-    _write_quotes(quotes_file)
-    _set_upload_env(monkeypatch, quotes_file, output_dir)
-    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
-    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
-
-    def provider_raises():
-        raise upload_quote_photo.FacebookTokenProviderError("token provider failed")
-
-    monkeypatch.setattr(
-        upload_quote_photo,
-        "configure_facebook_token_from_provider",
-        provider_raises,
+def test_render_removed_during_preparation_is_not_posted(tmp_path):
+    record = render(tmp_path)
+    post = Mock()
+    result = run(
+        tmp_path,
+        [record],
+        post=post,
+        prepare=lambda: (tmp_path / "q0011024x1024.jpeg").unlink(),
     )
-
-    called = {"post": 0}
-
-    result = upload_quote_photo.main(
-        post_func=lambda *_args, **_kwargs: called.__setitem__(
-            "post", called["post"] + 1
-        ),
-        alert_func=lambda *_args, **_kwargs: None,
-        sleep_func=lambda *_args, **_kwargs: None,
-        randomizer=_FakeRandom(
-            {
-                "_id": "q001",
-                "content": "quote",
-                "author": "Author",
-                "hashtags": "#quote",
-            }
-        ),
-    )
-
-    assert result == 1
-    assert called["post"] == 0
+    assert result.status == "failed"
+    post.assert_not_called()
 
 
-def test_main_returns_failure_when_email_alert_itself_fails(monkeypatch, tmp_path):
-    quotes_file = tmp_path / "quotes.json"
-    output_dir = tmp_path / "output"
-    _write_quotes(quotes_file)
-    _set_upload_env(
-        monkeypatch, quotes_file, output_dir, max_attempts=1, retry_base="2"
-    )
-
-    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
-    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
-
-    def failing_alert(_subject, _body):
-        raise RuntimeError("SMTP unavailable")
-
-    result = upload_quote_photo.main(
-        post_func=_FailingPost(),
-        alert_func=failing_alert,
-        sleep_func=lambda _delay: None,
-        randomizer=_FakeRandom(
-            {
-                "_id": "q001",
-                "content": "quote",
-                "author": "Author",
-                "hashtags": "#quote",
-            }
-        ),
-    )
-
-    assert result == 1
+def test_symlink_outside_render_directory_is_not_eligible(tmp_path):
+    directory = tmp_path / "renders"
+    directory.mkdir()
+    outside = tmp_path / "outside.jpeg"
+    outside.write_bytes(b"fixture")
+    (directory / "q0011024x1024.jpeg").symlink_to(outside)
+    assert run(directory, [{"_id": "q001"}]).status == "skipped"
 
 
-def test_main_does_not_call_default_post_function_when_injected(monkeypatch, tmp_path):
-    quotes_file = tmp_path / "quotes.json"
-    output_dir = tmp_path / "output"
-    _write_quotes(quotes_file)
-    _set_upload_env(monkeypatch, quotes_file, output_dir)
-    upload_quote_photo = _import_upload_quote_photo(monkeypatch)
-
-    monkeypatch.setattr(upload_quote_photo, "load_project_env", lambda: None)
-
-    default_called = {"value": False}
-
-    def default_post(*_args, **_kwargs):
-        default_called["value"] = True
-        raise AssertionError("default post should not be called")
-
-    monkeypatch.setattr(upload_quote_photo, "_post_quote_photo", default_post)
-
-    upload_quote_photo.main(
-        post_func=lambda *_args, **_kwargs: None,
-        sleep_func=lambda *_args, **_kwargs: None,
-        randomizer=_FakeRandom(
-            {
-                "_id": "q001",
-                "content": "quote",
-                "author": "Author",
-                "hashtags": "#quote",
-            }
-        ),
-    )
-
-    assert default_called["value"] is False
-
-
-def test_post_quote_photo_raises_when_no_token_is_returned(monkeypatch, tmp_path):
-    fake_image_path = tmp_path / "image.jpeg"
-    fake_image_path.write_text("image", encoding="utf-8")
-
-    upload_quote_photo = _import_upload_quote_photo(
-        monkeypatch,
-        upload_image_fn=lambda *_args, **_kwargs: "https://example.test/image.jpeg",
-        create_media_container_fn=lambda *_args, **_kwargs: "No Valid Token",
-        publish_media_container_fn=lambda *_args, **_kwargs: {"id": "published"},
-    )
-
-    with pytest.raises(RuntimeError, match="No Valid Token"):
-        upload_quote_photo._post_quote_photo(str(fake_image_path), "#quote")
-
-
-def test_post_quote_photo_raises_when_publish_response_is_falsey(monkeypatch, tmp_path):
-    fake_image_path = tmp_path / "image.jpeg"
-    fake_image_path.write_text("image", encoding="utf-8")
-
-    upload_quote_photo = _import_upload_quote_photo(
-        monkeypatch,
-        upload_image_fn=lambda *_args, **_kwargs: "https://example.test/image.jpeg",
-        create_media_container_fn=lambda *_args, **_kwargs: "container123",
-        publish_media_container_fn=lambda *_args, **_kwargs: None,
-    )
-
-    with pytest.raises(RuntimeError, match="publish_media_container returned empty"):
-        upload_quote_photo._post_quote_photo(str(fake_image_path), "#quote")
-
-
-def test_post_quote_photo_returns_truthy_response(monkeypatch, tmp_path):
-    fake_image_path = tmp_path / "image.jpeg"
-    fake_image_path.write_text("image", encoding="utf-8")
-
-    upload_quote_photo = _import_upload_quote_photo(
-        monkeypatch,
-        upload_image_fn=lambda *_args, **_kwargs: "https://example.test/image.jpeg",
-        create_media_container_fn=lambda *_args, **_kwargs: "container123",
-        publish_media_container_fn=lambda *_args, **_kwargs: {"id": "media-id"},
-    )
-
-    result = upload_quote_photo._post_quote_photo(str(fake_image_path), "#quote")
-
-    assert result == {"id": "media-id"}
+def test_randomizer_cannot_select_an_ineligible_file(tmp_path):
+    record = render(tmp_path)
+    with pytest.raises(ValueError):
+        run(tmp_path, [record], choose=lambda items: ({"_id": "other"}, Path("/other")))

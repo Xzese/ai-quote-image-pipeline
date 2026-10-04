@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
-import signal
 import textwrap
 import threading
 import time
@@ -18,17 +16,9 @@ if __package__ in (None, ""):
 
 from quote_image_generator.config import (
     ConfigurationError,
-    ensure_directory,
     get_env_bool,
     get_env_str,
-    get_required_file_path,
-    load_project_env,
     resolve_repo_path,
-)
-from quote_image_generator.quote_validation import (
-    QuoteValidationError,
-    safe_output_file_path,
-    validate_quote_records,
 )
 
 FONT_FILE = resolve_repo_path("assets/fonts/Alegreya-VariableFont.ttf")
@@ -138,9 +128,15 @@ def queue_prompt(
     workflow: Mapping[str, Any],
     post_request: QueuePostFn | None = None,
 ) -> str:
-    post = post_request or session.post
+    if post_request is None:
+        from quote_image_generator.deadline import Deadline, request
+
+        def post_request(url, **kwargs):
+            return request("POST", url, deadline=Deadline(300), **kwargs)
+
+    post = post_request
     try:
-        response = post(f"{comfyui_url}/prompt", json={"prompt": workflow}, timeout=300)
+        response = post(f"{comfyui_url}/prompt", json={"prompt": workflow})
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -157,10 +153,19 @@ def get_history(
     comfyui_url: str,
     prompt_id: str,
     get_request: QueueGetFn | None = None,
+    deadline=None,
 ) -> Mapping[str, Any]:
-    get = get_request or session.get
+    if get_request is None:
+        from quote_image_generator.deadline import Deadline, request
+
+        deadline = deadline or Deadline(300)
+
+        def get_request(url, **kwargs):
+            return request("GET", url, deadline=deadline, **kwargs)
+
+    get = get_request
     try:
-        response = get(f"{comfyui_url}/history/{prompt_id}", timeout=300)
+        response = get(f"{comfyui_url}/history/{prompt_id}")
         response.raise_for_status()
         return response.json()
     except Exception as exc:
@@ -178,26 +183,32 @@ def wait_for_image(
     stop_event: threading.Event | None = None,
     get_request: QueueGetFn | None = None,
     sleep_fn: SleepFn = time.sleep,
+    deadline=None,
 ) -> Mapping[str, Any]:
-    end_time = time.time() + timeout_seconds
+    from quote_image_generator.deadline import Deadline
 
-    while time.time() < end_time:
+    deadline = deadline or Deadline(timeout_seconds)
+
+    while True:
+        deadline.remaining()
         if stop_event is not None and stop_event.is_set():
-            raise KeyboardInterrupt(
-                f"Stop requested while waiting for prompt {prompt_id!r}."
-            )
+            raise InterruptedError("Rendering cancelled.")
 
         history = get_history(
             session=session,
             comfyui_url=comfyui_url,
             prompt_id=prompt_id,
             get_request=get_request,
+            deadline=deadline,
         )
         entry = history.get(prompt_id)
         if not isinstance(entry, Mapping):
-            sleep_fn(poll_interval)
+            sleep_fn(min(poll_interval, deadline.remaining()))
             continue
 
+        status = entry.get("status", {})
+        if isinstance(status, Mapping) and status.get("status_str") == "error":
+            raise ComfyUIError("ComfyUI execution failed.")
         images = []
         for node_output in entry.get("outputs", {}).values():
             if not isinstance(node_output, Mapping):
@@ -208,11 +219,10 @@ def wait_for_image(
         if images:
             image_info = images[0]
             if isinstance(image_info, Mapping):
+                deadline.remaining()
                 return image_info
 
-        sleep_fn(poll_interval)
-
-    raise TimeoutError(f"Timed out waiting for image for prompt_id {prompt_id}.")
+        sleep_fn(min(poll_interval, deadline.remaining()))
 
 
 def download_image(
@@ -222,7 +232,13 @@ def download_image(
     save_path: Path,
     get_request: QueueGetFn | None = None,
 ) -> None:
-    get = get_request or session.get
+    if get_request is None:
+        from quote_image_generator.deadline import Deadline, request
+
+        def get_request(url, **kwargs):
+            return request("GET", url, deadline=Deadline(300), **kwargs)
+
+    get = get_request
     filename = image_info.get("filename")
     if not isinstance(filename, str) or not filename.strip():
         raise ValueError(f"Invalid image record: missing filename. {image_info!r}")
@@ -234,7 +250,7 @@ def download_image(
     }
 
     try:
-        response = get(f"{comfyui_url}/view", params=params, timeout=300)
+        response = get(f"{comfyui_url}/view", params=params)
         response.raise_for_status()
     except Exception as exc:
         raise ComfyUIError(
@@ -242,9 +258,14 @@ def download_image(
         ) from exc
 
     temp_path = save_path.with_suffix(".part")
-    with temp_path.open("wb") as out:
-        out.write(response.content)
-    temp_path.replace(save_path)
+    try:
+        with temp_path.open("wb") as out:
+            out.write(response.content)
+        if temp_path.stat().st_size == 0:
+            raise IOError("Empty image download.")
+        temp_path.replace(save_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
     if not save_path.is_file() or save_path.stat().st_size <= 0:
         raise IOError(f"Image download for {filename!r} did not write any data.")
@@ -608,156 +629,9 @@ def cancel_comfyui_work(
 
 
 def main() -> int:
-    load_project_env()
-    stop_event = threading.Event()
+    from quote_image_generator.pipeline import main as workflow_main
 
-    def _handle_stop(signum: int, frame: object | None) -> None:
-        stop_event.set()
-        print("\nStop requested. Cancelling ComfyUI work safely...")
-
-    signal.signal(signal.SIGINT, _handle_stop)
-    if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _handle_stop)
-
-    try:
-        quotes_file_path = get_required_file_path("QUOTES_FILE_PATH")
-        output_image_path = ensure_directory(
-            resolve_repo_path(_required_str_env("OUTPUT_IMAGE_PATH"))
-        )
-        overlay_image_path = ensure_directory(
-            resolve_repo_path(_required_str_env("OVERLAY_OUTPUT_PATH"))
-        )
-        comfyui_url = (
-            get_env_str("COMFYUI_URL", "http://127.0.0.1:8000")
-            or "http://127.0.0.1:8000"
-        )
-        workflow_file_path = resolve_workflow_path(get_env_str("COMFYUI_WORKFLOW_PATH"))
-        allow_global_queue_clear = _safe_default_bool(
-            "COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR", default=False
-        )
-
-        with quotes_file_path.open("r", encoding="utf-8") as quote_file:
-            quote_data_raw = json.load(quote_file)
-        quote_data = validate_quote_records(quote_data_raw)
-
-        with workflow_file_path.open("r", encoding="utf-8") as workflow_file:
-            base_workflow = json.load(workflow_file)
-        validate_workflow_shape(base_workflow)
-
-        pending_prompt_ids: set[str] = set()
-        jobs: list[tuple[int, str, str, Mapping[str, Any], Path, Path]] = []
-        session = requests.Session()
-        current_prompt_id: str | None = None
-
-        try:
-            for index, item in enumerate(quote_data):
-                if stop_event.is_set():
-                    break
-
-                quote_id = item["_id"]
-                assert isinstance(quote_id, str)
-                prompt_text = item.get("prompt")
-                if not isinstance(prompt_text, str) or not prompt_text.strip():
-                    print(f"Skipping item {index} - no prompt")
-                    continue
-
-                output_png = safe_output_file_path(
-                    output_image_path, quote_id, WIDTH, HEIGHT, "png"
-                )
-                output_jpg = safe_output_file_path(
-                    overlay_image_path, quote_id, WIDTH, HEIGHT, "jpeg"
-                )
-                png_exists = output_png.is_file() and output_png.stat().st_size > 0
-
-                if not png_exists:
-                    workflow = build_workflow(
-                        base_workflow=base_workflow,
-                        prompt_text=f"{prompt_text} Must have a positive, high energy atmosphere.",
-                        width=WIDTH,
-                        height=HEIGHT,
-                        steps=STEPS,
-                        cfg=CFG,
-                        seed=-1,
-                    )
-                    prompt_id = queue_prompt(
-                        session=session, comfyui_url=comfyui_url, workflow=workflow
-                    )
-                    pending_prompt_ids.add(prompt_id)
-                    jobs.append(
-                        (index, quote_id, prompt_id, item, output_png, output_jpg)
-                    )
-                    print(
-                        f"Queued generation for item {index} with prompt_id {prompt_id}"
-                    )
-                else:
-                    jobs.append((index, quote_id, "", item, output_png, output_jpg))
-                    print(f"Image already exists for item {index}")
-
-            for index, quote_id, prompt_id, item, output_png, output_jpg in jobs:
-                if stop_event.is_set():
-                    break
-
-                try:
-                    if prompt_id:
-                        current_prompt_id = prompt_id
-                        image_info = wait_for_image(
-                            session=session,
-                            comfyui_url=comfyui_url,
-                            prompt_id=prompt_id,
-                            stop_event=stop_event,
-                        )
-                        download_image(
-                            session=session,
-                            comfyui_url=comfyui_url,
-                            image_info=image_info,
-                            save_path=output_png,
-                        )
-                        pending_prompt_ids.discard(prompt_id)
-                        current_prompt_id = None
-                        print(f"Image generated for item {index}")
-
-                    if not output_jpg.is_file() and output_png.is_file():
-                        if overlay_text_on_image(
-                            output_png, output_jpg, item["content"], item["author"]
-                        ):
-                            print(f"Added overlay for item {index}")
-                    else:
-                        print(f"Overlay already exists for item {index}")
-                except KeyboardInterrupt:
-                    current_prompt_id = prompt_id
-                    raise
-                except Exception as error:
-                    print(f"An error occurred while processing item {index}: {error}")
-        finally:
-            if stop_event.is_set():
-                try:
-                    cancel_comfyui_work(
-                        session=session,
-                        comfyui_url=comfyui_url,
-                        current_prompt_id=current_prompt_id,
-                        pending_prompt_ids=list(pending_prompt_ids),
-                        allow_global_queue_clear=allow_global_queue_clear,
-                    )
-                    print("Stopped safely.")
-                except Exception as error:
-                    print(f"Failed to cancel ComfyUI work: {error}")
-            session.close()
-
-        return 0
-    except QuoteValidationError as exc:
-        print(f"Invalid quote payload: {exc}")
-        return 1
-    except WorkflowValidationError as exc:
-        print(f"Invalid workflow shape: {exc}")
-        return 1
-    except ConfigurationError as exc:
-        print(f"Configuration error: {exc}")
-        return 1
-    except KeyboardInterrupt:
-        return 130
-    except Exception as exc:
-        print(f"Unhandled error: {exc}")
-        return 1
+    return workflow_main(["--stage", "render"])
 
 
 if __name__ == "__main__":
