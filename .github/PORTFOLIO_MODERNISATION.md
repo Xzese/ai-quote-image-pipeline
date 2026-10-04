@@ -1,7 +1,22 @@
 # AI pipeline maturity pass
 
-Status: implementation started. Keep the PR in draft.
+The implementation now covers the planned workflow semantics and reproducibility
+work. Keep the PR in draft until the intended live-provider smoke tests and
+human image-quality review have been completed.
 
-Implemented in this pass: explicit publishing outcomes, eligible-render selection, no automatic replay after an unconfirmed publication, optional dependency loading, redacted failure notification, and a pinned hardened publishing submodule. Fifteen isolated tests passed; the entry point passed syntax compilation.
+- Explicit prompt, render and publishing outcomes, partial-success reporting and exit codes.
+- Completed-artefact receipts, cache invalidation and publication eligibility.
+- Cross-process corpus, output-directory and local LM Studio coordination.
+- Durable publication claims, container/media IDs and operator reconciliation.
+- Model, template, workflow, seed, generation and artefact metadata.
+- A documented local word limit, replacing the unrelated BERT token count.
+- A fixed authored evaluation corpus, measurable summaries and human review guidance.
+- A deterministic offline demo using the real overlay and persistence code.
+- One overall ComfyUI submission/poll/download deadline, including slow response bodies.
+- Hardened publisher integration, readiness polling and redacted notifications.
+- Updated hashed dependency pins with the unused vulnerable tokenizer dependency removed.
 
-This is not the complete pipeline plan. Prompt/render outcome state, cross-process locking, persistent publication ownership, model/workflow/seed metadata, tokenizer review, evaluation corpus, full offline demo, ComfyUI deadline changes, full CI and live integration remain open. See docs/publishing-modernisation.md for behaviour changes and validation limits.
+See [workflow documentation](../docs/workflow.md) for the contracts, migration
+instructions, recovery commands and validation boundaries. CI retains both
+projects' tests, formatting, lint, compilation and vulnerability audits, and now
+executes the offline demo.

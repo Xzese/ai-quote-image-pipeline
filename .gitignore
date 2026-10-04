@@ -213,3 +213,8 @@ tmp/
 # LM Studio / Hugging Face
 lmstudio/
 lm-studio/
+
+.venv311/
+*.state.json
+*.summary.json
+*.lock

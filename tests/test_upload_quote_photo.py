@@ -6,9 +6,27 @@ from unittest.mock import Mock
 
 import pytest
 from quote_image_generator.publishing_run import publish_one
+from quote_image_generator.run_state import StateStore, file_digest
+from quote_image_generator.pipeline import prompt_output, render_input
 
 
 def run(tmp_path, records, *, post=None, prepare=None, alert=None, choose=None):
+    records = [
+        dict(r, content=r.get("content", "Quote"), author=r.get("author", "Author"))
+        for r in records
+    ]
+    store = StateStore(tmp_path / "corpus.json")
+    for record in records:
+        path = tmp_path / f"{record['_id']}1024x1024.jpeg"
+        if path.is_file():
+            item = store.item(record)
+            item["prompt"] = {"status": "completed", "output": prompt_output(record)}
+            item["render"] = {
+                "input": render_input(record, item, {}),
+                "status": "completed",
+                "path": str(path),
+                "sha256": file_digest(path),
+            }
     return publish_one(
         records,
         tmp_path,
@@ -17,6 +35,7 @@ def run(tmp_path, records, *, post=None, prepare=None, alert=None, choose=None):
         post=post or Mock(return_value={"id": "confirmed"}),
         prepare=prepare or Mock(),
         alert=alert or Mock(),
+        store=store,
     )
 
 

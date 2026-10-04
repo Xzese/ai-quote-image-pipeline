@@ -84,8 +84,6 @@ cp .env.example .env
 QUOTES_FILE_PATH=output/quotes.json
 OUTPUT_IMAGE_PATH=output/images
 OVERLAY_OUTPUT_PATH=output/images_text_overlay
-UPLOAD_QUOTE_MAX_ATTEMPTS=3
-UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
 ```
 
 ### LM Studio configuration
@@ -99,7 +97,6 @@ LM_STUDIO_MODEL=qwen/qwen3.5-9b
 LM_STUDIO_PRESET=
 LM_STUDIO_NATIVE_API_BASE_URL=
 LM_STUDIO_CONTEXT_LENGTH=8192
-LM_STUDIO_PARALLEL_WORKERS=4
 ```
 
 ### ComfyUI configuration
@@ -107,13 +104,15 @@ LM_STUDIO_PARALLEL_WORKERS=4
 ```ini
 COMFYUI_URL=http://127.0.0.1:8000
 COMFYUI_WORKFLOW_PATH=workflows/image_z_image_turbo.json
-COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=false
+COMFYUI_DEADLINE_SECONDS=300
+GENERATION_SEED=42
 ```
 
 ### Optional publishing configuration
 
 ```ini
 # Optional Instagram posting
+GRAPH_API_VERSION=
 ACCESS_TOKEN=
 ACCESS_TOKEN_EXPIRY=
 IG_BUSINESS_USER_ID=
@@ -139,10 +138,10 @@ SENDER_PASSWORD=
 RECIPIENT_EMAIL=
 ```
 
-The retry values apply to one run of the posting module.
-Posting credentials are optional unless you run the posting module. After the
-final failed posting attempt, the script uses the SMTP settings above to send one
-failure alert.
+Posting credentials are optional unless you request publishing. Publication is
+attempted once; an unconfirmed outcome is stored durably and requires operator
+reconciliation. Optional SMTP settings send a redacted notification. See the
+[workflow contracts and recovery guide](docs/workflow.md).
 
 #### Remote Facebook token provider
 
@@ -227,42 +226,39 @@ for an explanation of node-based workflows.
    `workflows/image_z_image_turbo.json`, or provide another API-format workflow.
 5. Run `python -m quote_image_generator.get_image`.
 
-The default prompt seed behavior is controlled in the script. Keep the defaults
-unless you intentionally want to change image reproducibility. This project
-uses a local ComfyUI API rather than the ComfyUI Cloud API.
+`GENERATION_SEED` defaults to `42` and is recorded with the actual workflow and
+model filenames. `COMFYUI_DEADLINE_SECONDS` bounds submission, polling and download
+for each image. The project uses the local ComfyUI API.
 
 ## Run order
 
-1. Pull base quotes:
+Fetch the quote corpus, then run prompt generation and rendering together:
 
-   ```bash
-   python -m quote_image_generator.get_quotes
-   ```
-
-2. Generate prompt/hashtags:
-
-   ```bash
-   python -m quote_image_generator.get_prompt
-   ```
-
-3. Generate images + overlay:
-
-   ```bash
-   python -m quote_image_generator.get_image
-   ```
-
-4. Optional one-post upload (bounded by one run):
-
-   ```bash
-   python -m quote_image_generator.upload_quote_photo
-   ```
-
-Upload retry controls are set in `.env`:
-
-```ini
-UPLOAD_QUOTE_MAX_ATTEMPTS=3
-UPLOAD_QUOTE_RETRY_BASE_SECONDS=2.0
+```bash
+python -m quote_image_generator.get_quotes
+python -m quote_image_generator.pipeline
 ```
+
+The individual `get_prompt`, `get_image`, and `upload_quote_photo` entry points
+remain available. They use the same receipts and locks. Review completed images
+before running the optional publishing stage:
+
+```bash
+python -m quote_image_generator.pipeline --stage publish
+```
+
+Try the complete fixture-backed workflow without services or credentials:
+
+```bash
+python -m quote_image_generator.pipeline --offline --output output/demo
+```
+
+The runner emits a JSON summary and saves durable stage receipts beside the
+quote corpus. Completed stages are reused only while their inputs and artefacts
+match. Partial success exits nonzero while retaining successful work. Existing
+images without receipts must be regenerated. Read the
+[workflow and evaluation guide](docs/workflow.md) for exit codes, reproducibility
+metadata, the fixed evaluation corpus, deadline behaviour and recovery commands.
 
 ## Quote schema
 
@@ -295,6 +291,8 @@ Default release output (from the `.env` defaults):
 ```text
 output/
 ├── quotes.json                 # updated quote dataset
+├── quotes.json.state.json      # durable receipts and publication journal
+├── quotes.json.summary.json    # latest measurable run summary
 ├── images/                     # ComfyUI base render output
 │   └── <_id>1024x1024.png
 └── images_text_overlay/        # final images with quote overlay
@@ -303,15 +301,10 @@ output/
 
 ## Cancel behavior
 
-### Prompt generation
-
-- Interrupting once triggers graceful shutdown and waits for running workers.
-- Interrupting twice exits immediately.
-
-### Image generation
-
-- Interrupt request normally cancels work associated with this run (owned jobs).
-- Set `COMFYUI_ALLOW_GLOBAL_QUEUE_CLEAR=true` only if you explicitly want a full queue clear instead of owned-job cancellation.
+SIGINT and SIGTERM stop new work and preserve completed receipts. ComfyUI
+requests are terminated within their wall-clock deadline. Cleanup deletes only
+the known job owned by this run; it never interrupts the global server queue.
+LM Studio calls already in progress keep their configured request timeout.
 
 ## Troubleshooting
 
@@ -346,8 +339,9 @@ output/
   - `python -m quote_image_generator.get_image`
   - `python -m quote_image_generator.upload_quote_photo` (single-post path)
   - `python -m quote_image_generator.sort_json [quotes-file]`
-- Project test discovery:
-  - `python -m pytest`
+- Pipeline tests: `python -m pytest -q tests`.
+- Publishing submodule tests: `(cd upload_photo && python -m pytest -q tests)`.
+- Keep the suites in separate Python processes so their module roots do not collide.
 
 ## Governance
 

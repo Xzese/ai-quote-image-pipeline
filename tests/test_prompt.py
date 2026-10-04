@@ -1,4 +1,3 @@
-import concurrent.futures
 from types import SimpleNamespace
 
 import pytest
@@ -704,247 +703,100 @@ def test_validate_lm_studio_readiness_normalizes_model_page_url(monkeypatch):
     assert observed["model_name"] == "liquid/lfm2.5-1.2b"
 
 
-def test_main_injects_client_without_external_calls(monkeypatch, tmp_path):
-    expected_path = tmp_path / "quotes.json"
-    monkeypatch.setenv("QUOTES_FILE_PATH", str(expected_path))
-    monkeypatch.delenv("LM_STUDIO_BASE_URL", raising=False)
-    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
-    monkeypatch.setattr(get_prompt, "load_project_env", lambda: None)
+def test_prompt_main_persists_complete_receipt(monkeypatch, tmp_path):
+    import json
+    from quote_image_generator.pipeline import LivePrompt
 
+    path = tmp_path / "quotes.json"
+    path.write_text(json.dumps([{"_id": "id", "content": "c", "author": "a"}]))
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(path))
     monkeypatch.setattr(
-        get_prompt,
-        "_load_quote_data",
-        lambda path: [
-            {"_id": "id", "content": "c", "author": "a", "prompt": "", "hashtags": ""}
-        ],
+        LivePrompt,
+        "__call__",
+        lambda self, record: {"prompt": "blue sky", "hashtags": "#sky"},
     )
-    monkeypatch.setattr(
-        get_prompt, "process_item", lambda *_args, **_kwargs: (0, False)
-    )
-    monkeypatch.setattr(
-        get_prompt, "_validate_lm_studio_readiness", lambda *_, **__: None
-    )
-    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", lambda **_: None)
-    monkeypatch.setattr(get_prompt, "create_tokenizer", lambda: object())
-
-    created = {}
-
-    def fake_create_client(base_url: str, api_key: str):
-        created.update({"base_url": base_url, "api_key": api_key})
-        return object()
-
-    monkeypatch.setattr(get_prompt, "create_openai_client", fake_create_client)
-
-    class ImmediateExecutor:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            pass
-
-        def submit(self, fn, *args, **kwargs):
-            future = concurrent.futures.Future()
-            future.set_result(fn(*args, **kwargs))
-            return future
-
-        def shutdown(self, *_args, **_kwargs):
-            pass
-
-    monkeypatch.setattr(get_prompt, "ThreadPoolExecutor", ImmediateExecutor)
-    monkeypatch.setattr(get_prompt, "save_json", lambda *_args, **_kwargs: None)
-
-    result = get_prompt.main()
-
-    assert result == 0
-    assert created["base_url"] == get_prompt.DEFAULT_LM_STUDIO_BASE_URL
-    assert created["api_key"] == get_prompt.DEFAULT_LM_STUDIO_API_KEY
-
-
-def test_main_reports_clean_startup_cancellation(monkeypatch, tmp_path):
-    quotes_path = tmp_path / "quotes.json"
-    monkeypatch.setenv("QUOTES_FILE_PATH", str(quotes_path))
-    monkeypatch.setattr(get_prompt, "load_project_env", lambda: None)
-    monkeypatch.setattr(
-        get_prompt,
-        "_load_quote_data",
-        lambda _path: [{"content": "c", "author": "a", "prompt": "", "hashtags": ""}],
+    assert get_prompt.main() == 0
+    receipt = json.loads((tmp_path / "quotes.json.state.json").read_text())
+    assert receipt["items"]["id"]["prompt"]["status"] == "completed"
+    assert (
+        receipt["items"]["id"]["prompt"]["metadata"]["measurement"]
+        == "whitespace-words-v1"
     )
 
-    def cancel_startup(**_kwargs):
-        get_prompt.stop_event.set()
-        raise InterruptedError("Shutdown requested while downloading LM Studio model")
 
-    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", cancel_startup)
-    logs = []
-    monkeypatch.setattr(get_prompt, "log", logs.append)
+def test_prompt_main_reports_generation_failure(monkeypatch, tmp_path):
+    import json
+    from quote_image_generator.pipeline import LivePrompt
 
-    result = get_prompt.main()
-
-    assert result == 130
-    assert logs == ["Startup cancelled. No quote items were processed."]
-
-
-def test_main_reports_single_pending_cancel_summary(monkeypatch, tmp_path):
-    quotes_path = tmp_path / "quotes.json"
-    monkeypatch.setenv("QUOTES_FILE_PATH", str(quotes_path))
-    monkeypatch.setattr(get_prompt, "load_project_env", lambda: None)
+    path = tmp_path / "quotes.json"
+    path.write_text(json.dumps([{"_id": "id", "content": "c", "author": "a"}]))
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(path))
     monkeypatch.setattr(
-        get_prompt,
-        "_load_quote_data",
-        lambda path: [
-            {"content": f"c{idx}", "author": "a", "prompt": "", "hashtags": ""}
-            for idx in range(3)
-        ],
+        LivePrompt,
+        "__call__",
+        lambda self, record: {"prompt": None, "hashtags": "#sky"},
     )
-    monkeypatch.setattr(get_prompt, "create_tokenizer", lambda: object())
+    assert get_prompt.main() == 1
+    assert (
+        json.loads((tmp_path / "quotes.json.summary.json").read_text())["counts"][
+            "failed"
+        ]
+        == 1
+    )
+
+
+def test_prompt_main_reports_startup_cancellation(monkeypatch, tmp_path):
+    import json
+
+    path = tmp_path / "quotes.json"
+    path.write_text(json.dumps([{"_id": "id", "content": "c", "author": "a"}]))
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(path))
+
+    def cancel(**kwargs):
+        raise InterruptedError("cancelled")
+
+    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", cancel)
+    assert get_prompt.main() == 130
+
+
+def test_live_prompt_unloads_owned_model_after_readiness_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(tmp_path / "corpus.json"))
+    from quote_image_generator.pipeline import LivePrompt
+
+    def ensure(**kwargs):
+        kwargs["on_load"]("owned")
+        return "owned"
+
+    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", ensure)
     monkeypatch.setattr(get_prompt, "create_openai_client", lambda *_: object())
     monkeypatch.setattr(
         get_prompt,
         "_validate_lm_studio_readiness",
-        lambda *_, **__: None,
+        lambda **_: (_ for _ in ()).throw(RuntimeError("not ready")),
     )
-    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", lambda **_: None)
-    monkeypatch.setattr(get_prompt, "save_json", lambda *_args, **_kwargs: None)
+    unloaded = []
+    monkeypatch.setattr(
+        get_prompt,
+        "_unload_lm_studio_model",
+        lambda **kw: unloaded.append(kw["instance_id"]),
+    )
+    adapter = LivePrompt()
+    adapter.metadata()
+    with pytest.raises(RuntimeError):
+        adapter({"_id": "id", "content": "c", "author": "a"})
+    adapter.close()
+    assert unloaded == ["owned"]
 
-    class PendingOnlyExecutor:
-        def __init__(self, *_args, **_kwargs):
-            pass
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            pass
-
-        def submit(self, *_args, **_kwargs):
-            get_prompt.stop_event.set()
-            return concurrent.futures.Future()
-
-        def shutdown(self, *_args, **_kwargs):
-            pass
-
-    monkeypatch.setattr(get_prompt, "ThreadPoolExecutor", PendingOnlyExecutor)
-
-    logs = []
-    monkeypatch.setattr(get_prompt, "log", lambda message: logs.append(message))
-
-    result = get_prompt.main()
-
-    pending_cancel_lines = [
-        line for line in logs if "pending items have been cancelled" in line
+def test_word_count_is_local_and_deterministic():
+    counter = get_prompt.create_tokenizer()
+    assert counter.tokenize("  après la pluie — lumière  ") == [
+        "après",
+        "la",
+        "pluie",
+        "—",
+        "lumière",
     ]
-    pending_cancel_lines += [
-        line for line in logs if "pending item has been cancelled" in line
-    ]
-
-    assert result == 0
-    assert len(pending_cancel_lines) == 1
-    assert all("Cancelled pending Item" not in line for line in logs)
-
-
-def test_main_does_not_emit_per_item_cancel_logs(monkeypatch, tmp_path):
-    quotes_path = tmp_path / "quotes.json"
-    monkeypatch.setenv("QUOTES_FILE_PATH", str(quotes_path))
-    monkeypatch.setattr(get_prompt, "load_project_env", lambda: None)
-    monkeypatch.setattr(
-        get_prompt,
-        "_load_quote_data",
-        lambda path: [
-            {"content": f"c{idx}", "author": "a", "prompt": "", "hashtags": ""}
-            for idx in range(3)
-        ],
-    )
-    monkeypatch.setattr(get_prompt, "create_tokenizer", lambda: object())
-    monkeypatch.setattr(get_prompt, "create_openai_client", lambda *_: object())
-    monkeypatch.setattr(
-        get_prompt,
-        "_validate_lm_studio_readiness",
-        lambda *_, **__: None,
-    )
-    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", lambda **_: None)
-    monkeypatch.setattr(get_prompt, "save_json", lambda *_args, **_kwargs: None)
-
-    class ShutdownFuturesExecutor:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            pass
-
-        def submit(self, *_args, **_kwargs):
-            get_prompt.stop_event.set()
-            future = concurrent.futures.Future()
-            future.set_exception(InterruptedError("Shutdown requested"))
-            return future
-
-        def shutdown(self, *_args, **_kwargs):
-            pass
-
-    monkeypatch.setattr(get_prompt, "ThreadPoolExecutor", ShutdownFuturesExecutor)
-
-    logs = []
-    monkeypatch.setattr(get_prompt, "log", lambda message: logs.append(message))
-
-    result = get_prompt.main()
-
-    assert result == 0
-    assert all("Stopped Item" not in line for line in logs)
-    assert all("Finished Item" not in line for line in logs)
-
-
-def test_main_second_ctrl_c_exits_immediately(monkeypatch, tmp_path):
-    quotes_path = tmp_path / "quotes.json"
-    monkeypatch.setenv("QUOTES_FILE_PATH", str(quotes_path))
-    monkeypatch.setattr(get_prompt, "load_project_env", lambda: None)
-
-    monkeypatch.setattr(
-        get_prompt,
-        "_load_quote_data",
-        lambda path: [{"content": "c", "author": "a", "prompt": "", "hashtags": ""}],
-    )
-    monkeypatch.setattr(get_prompt, "create_tokenizer", lambda: object())
-    monkeypatch.setattr(get_prompt, "create_openai_client", lambda *_: object())
-    monkeypatch.setattr(
-        get_prompt,
-        "_validate_lm_studio_readiness",
-        lambda *_, **__: None,
-    )
-    monkeypatch.setattr(get_prompt, "ensure_lm_studio_model", lambda **_: None)
-
-    save_calls = []
-    monkeypatch.setattr(
-        get_prompt,
-        "save_json",
-        lambda *_args, **_kwargs: save_calls.append("saved"),
-    )
-
-    shutdown_calls = []
-
-    class ImmediateCancelExecutor:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def submit(self, *_args, **_kwargs):
-            get_prompt.stop_event.set()
-            get_prompt.force_exit_event.set()
-            return concurrent.futures.Future()
-
-        def shutdown(self, **kwargs):
-            shutdown_calls.append(kwargs)
-
-    monkeypatch.setattr(get_prompt, "ThreadPoolExecutor", ImmediateCancelExecutor)
-
-    result = get_prompt.main()
-
-    assert result == 130
-    assert save_calls == []
-    assert shutdown_calls == [{"wait": False, "cancel_futures": True}]
 
 
 class _ImmediateExit(SystemExit):
@@ -975,3 +827,27 @@ def test_handle_sigint_second_catches_exit_immediately(monkeypatch):
 
     assert exit_calls == [130]
     assert logs.count("\nSecond Ctrl+C received. Exiting immediately.") == 1
+
+
+def test_live_prompt_never_unloads_reused_instance(monkeypatch, tmp_path):
+    from quote_image_generator.pipeline import LivePrompt
+
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(tmp_path / "corpus.json"))
+    monkeypatch.setattr(
+        get_prompt, "ensure_lm_studio_model", lambda **_: "pre-existing"
+    )
+    monkeypatch.setattr(get_prompt, "create_openai_client", lambda *_: object())
+    monkeypatch.setattr(get_prompt, "_validate_lm_studio_readiness", lambda **_: None)
+    monkeypatch.setattr(get_prompt, "generate_prompt", lambda *_, **__: "sky")
+    monkeypatch.setattr(get_prompt, "generate_hashtags", lambda *_, **__: "#sky")
+    unloaded = []
+    monkeypatch.setattr(
+        get_prompt,
+        "_unload_lm_studio_model",
+        lambda **kw: unloaded.append(kw["instance_id"]),
+    )
+    adapter = LivePrompt()
+    adapter.metadata()
+    adapter({"_id": "id", "content": "c", "author": "a"})
+    adapter.close()
+    assert unloaded == []

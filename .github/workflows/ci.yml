@@ -53,6 +53,9 @@ jobs:
         working-directory: upload_photo
         run: python -m pytest -q tests
 
+      - name: Run deterministic offline demo
+        run: python -m quote_image_generator.pipeline --offline --output output/demo
+
       - name: Dependency vulnerability checks
         run: |
           pip-audit -r requirements-lock.txt

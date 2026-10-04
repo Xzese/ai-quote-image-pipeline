@@ -19,7 +19,9 @@ Run these checks before opening a PR:
 python -m compileall -q .
 ruff format --check --exclude upload_photo .
 ruff check --exclude upload_photo .
-pytest -q
+python -m pytest -q tests
+(cd upload_photo && python -m pytest -q tests)
+python -m quote_image_generator.pipeline --offline --output output/demo
 pip-audit -r requirements-lock.txt
 ```
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -17,6 +16,7 @@ from quote_image_generator.config import (
     load_project_env,
 )
 from quote_image_generator.quote_validation import validate_quote_records
+from quote_image_generator.run_state import atomic_json, corpus_lock, RunBusy
 
 DEFAULT_ENDPOINT_URL = "http://api.quotable.io/quotes"
 DEFAULT_PAGE_LIMIT = 150
@@ -82,8 +82,8 @@ def fetch_quotes(
 
 
 def write_quotes(path, quotes: list[dict[str, Any]]) -> None:
-    with open(path, "w", encoding="utf-8") as json_file:
-        json.dump(quotes, json_file, indent=4)
+    with corpus_lock(path):
+        atomic_json(path, quotes)
 
 
 def deduplicate_quotes_by_id(
@@ -125,6 +125,9 @@ def main() -> int:
 
         validated_quotes = validate_quote_records(quote_list)
         write_quotes(quotes_file_path, validated_quotes)
+    except RunBusy:
+        print("Another run owns this quote corpus.", file=sys.stderr)
+        return 75
     except ConfigurationError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 1
