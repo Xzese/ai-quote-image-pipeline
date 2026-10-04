@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from collections import Counter
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import signal
 import re
@@ -330,6 +331,8 @@ class LivePrompt:
 
         self.settings = gp._load_prompt_settings()
         return {
+            "provider": self.settings["provider"],
+            "endpoint_sha256": digest(self.settings["base_url"]),
             "model": self.settings["model_name"],
             "preset": self.settings["preset"],
             "template_version": PROMPT_TEMPLATE_VERSION,
@@ -345,28 +348,16 @@ class LivePrompt:
 
         if self.runtime is None:
             s = self.settings
-            from filelock import FileLock
+            if s["provider"] == "ollama":
+                from quote_image_generator.ollama import OllamaClient
 
-            lock_path = resolve_repo_path(
-                "output/locks/lm-" + digest(s["native_api_base_url"]) + ".lock"
-            )
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            if self.model_lock is None:
-                self.model_lock = FileLock(lock_path, timeout=0)
-            if not self.model_lock.is_locked:
-                self.model_lock.acquire()
-            instance = gp.ensure_lm_studio_model(
-                native_api_base_url=s["native_api_base_url"],
-                api_key=s["api_key"],
-                model_name=s["model_name"],
-                context_length=s["context_length"],
-                on_load=lambda identifier: setattr(self, "owned_instance", identifier),
-            )
-            self.runtime = (
-                gp.create_openai_client(s["base_url"], s["api_key"]),
-                gp.create_tokenizer(),
-                instance,
-            )
+                self.runtime = (
+                    OllamaClient(s["base_url"], s["context_length"], gp.stop_event),
+                    gp.create_tokenizer(),
+                    None,
+                )
+            else:
+                self._start_lm_studio(gp, s)
         if not self.ready:
             gp._validate_lm_studio_readiness(
                 client=self.runtime[0],
@@ -388,11 +379,36 @@ class LivePrompt:
             "prompt": generated,
             "hashtags": hashtags,
             "generation": {
+                "provider": self.settings["provider"],
                 "model": self.settings["model_name"],
                 "instance_id": self.runtime[2],
                 "created_at": now(),
             },
         }
+
+    def _start_lm_studio(self, gp, s):
+        from filelock import FileLock
+
+        lock_path = resolve_repo_path(
+            "output/locks/lm-" + digest(s["native_api_base_url"]) + ".lock"
+        )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.model_lock is None:
+            self.model_lock = FileLock(lock_path, timeout=0)
+        if not self.model_lock.is_locked:
+            self.model_lock.acquire()
+        instance = gp.ensure_lm_studio_model(
+            native_api_base_url=s["native_api_base_url"],
+            api_key=s["api_key"],
+            model_name=s["model_name"],
+            context_length=s["context_length"],
+            on_load=lambda identifier: setattr(self, "owned_instance", identifier),
+        )
+        self.runtime = (
+            gp.create_openai_client(s["base_url"], s["api_key"]),
+            gp.create_tokenizer(),
+            instance,
+        )
 
     def close(self):
         try:
@@ -420,6 +436,21 @@ class LiveRender:
 
         self.gi = gi
         self.stop_event = stop_event
+        self.width = get_env_int("COMFYUI_WIDTH", gi.WIDTH)
+        self.height = get_env_int("COMFYUI_HEIGHT", gi.HEIGHT)
+        self.steps = get_env_int("COMFYUI_STEPS", gi.STEPS)
+        self.cfg = float(get_env_str("COMFYUI_CFG", str(gi.CFG)))
+        if any(
+            value is None or value <= 0
+            for value in (self.width, self.height, self.steps)
+        ):
+            raise ValueError(
+                "COMFYUI_WIDTH, COMFYUI_HEIGHT and COMFYUI_STEPS must be positive."
+            )
+        if self.width % 8 or self.height % 8:
+            raise ValueError("ComfyUI dimensions must be multiples of 8.")
+        if not math.isfinite(self.cfg) or self.cfg < 0:
+            raise ValueError("COMFYUI_CFG must be finite and nonnegative.")
         self.workflow = json.loads(
             gi.resolve_workflow_path(get_env_str("COMFYUI_WORKFLOW_PATH")).read_text()
         )
@@ -453,10 +484,10 @@ class LiveRender:
             "workflow_sha256": digest(self.workflow),
             "models": models,
             "seed": self.seed,
-            "width": self.gi.WIDTH,
-            "height": self.gi.HEIGHT,
-            "steps": self.gi.STEPS,
-            "cfg": self.gi.CFG,
+            "width": self.width,
+            "height": self.height,
+            "steps": self.steps,
+            "cfg": self.cfg,
             "template_version": RENDER_TEMPLATE_VERSION,
             "font_sha256": file_digest(self.gi.FONT_FILE),
             "overlay_version": "alegreya-v1",
@@ -472,13 +503,19 @@ class LiveRender:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.final_dir.mkdir(parents=True, exist_ok=True)
         png = safe_output_file_path(
-            self.base_dir, record["_id"], gi.WIDTH, gi.HEIGHT, "png"
+            self.base_dir, record["_id"], self.width, self.height, "png"
         )
         jpg = safe_output_file_path(
-            self.final_dir, record["_id"], gi.WIDTH, gi.HEIGHT, "jpeg"
+            self.final_dir, record["_id"], self.width, self.height, "jpeg"
         )
         workflow = gi.build_workflow(
-            self.workflow, record["prompt"] + RENDER_SUFFIX, seed=self.seed
+            self.workflow,
+            record["prompt"] + RENDER_SUFFIX,
+            seed=self.seed,
+            width=self.width,
+            height=self.height,
+            steps=self.steps,
+            cfg=self.cfg,
         )
         deadline = Deadline(self.timeout)
 
@@ -522,7 +559,7 @@ class LiveRender:
 
         with Image.open(png) as base:
             base.load()
-            if base.size != (gi.WIDTH, gi.HEIGHT):
+            if base.size != (self.width, self.height):
                 raise ValueError("Unexpected render dimensions.")
         temp = jpg.with_suffix(".part")
         try:

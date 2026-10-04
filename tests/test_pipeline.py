@@ -303,13 +303,25 @@ def test_offline_demo_is_network_free_and_reproducible(tmp_path, monkeypatch):
     assert demo(first)["counts"]["skipped"] == 13
 
 
-def test_live_render_records_actual_workflow_and_seed(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "width,height,steps,cfg", [(1024, 1024, 10, 1), (512, 512, 4, 7.5)]
+)
+def test_live_render_records_actual_workflow_and_seed(
+    tmp_path, monkeypatch, width, height, steps, cfg
+):
     from quote_image_generator import get_image as gi
     from quote_image_generator import deadline
 
     monkeypatch.setenv("OUTPUT_IMAGE_PATH", str(tmp_path / "base"))
     monkeypatch.setenv("OVERLAY_OUTPUT_PATH", str(tmp_path / "final"))
     monkeypatch.setenv("GENERATION_SEED", "123")
+    for name, value in (
+        ("WIDTH", width),
+        ("HEIGHT", height),
+        ("STEPS", steps),
+        ("CFG", cfg),
+    ):
+        monkeypatch.setenv("COMFYUI_" + name, str(value))
     captured = {}
 
     def queue(session, url, workflow, post_request=None):
@@ -325,7 +337,7 @@ def test_live_render_records_actual_workflow_and_seed(tmp_path, monkeypatch):
     monkeypatch.setattr(gi, "wait_for_image", wait)
 
     def download(session, url, info, path, get_request=None):
-        with Image.new("RGB", (1024, 1024), "blue") as image:
+        with Image.new("RGB", (width, height), "blue") as image:
             image.save(path)
 
     monkeypatch.setattr(gi, "download_image", download)
@@ -354,6 +366,12 @@ def test_live_render_records_actual_workflow_and_seed(tmp_path, monkeypatch):
         == "z_image_turbo_bf16.safetensors"
     )
     assert Path(result["path"]).is_file()
+    with Image.open(result["path"]) as image:
+        assert image.size == (width, height)
+    assert captured["workflow"][gi.DIMENSIONS_NODE_ID]["inputs"]["width"] == width
+    assert captured["workflow"][gi.SAMPLER_NODE_ID]["inputs"]["steps"] == steps
+    assert captured["workflow"][gi.SAMPLER_NODE_ID]["inputs"]["cfg"] == cfg
+    assert adapter.metadata()["cfg"] == cfg
 
 
 def test_confirmation_persistence_failure_remains_unknown(corpus, monkeypatch):

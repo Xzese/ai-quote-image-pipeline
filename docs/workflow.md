@@ -41,6 +41,7 @@ Successful items survive another item's failure. A later run retries incomplete
 prompt/render stages and reuses valid completed stages. Cancellation preserves
 completed work and stops scheduling further items. LM Studio calls already in
 progress retain their existing request timeout; ComfyUI I/O can be terminated.
+Ollama requests use the same terminable HTTP transport as ComfyUI.
 
 The final stdout line is the JSON run summary. It includes per-item outcomes,
 status counts, elapsed time, prompt word counts, completed prompt count, eligible
@@ -79,6 +80,7 @@ artefact hash, and a path beneath the configured final-image directory. Legacy
 files alone are not eligible. Run the prompt and render stages to create fresh
 receipts. Source or prompt edits invalidate dependent renders; model, template,
 workflow, font or seed changes invalidate the affected stage's cache.
+Changing `LLM_PROVIDER`, its endpoint, model or context cap also invalidates prompts.
 
 The journal claims an operation before object upload or any Meta call. The claim
 is keyed by account and quote source, so changing the render seed does not replay
@@ -113,7 +115,7 @@ merely because a request timed out or a post is not immediately visible.
 
 ## Generation records
 
-Prompt receipts record the requested LM Studio model, loaded instance ID when
+Prompt receipts record the provider, endpoint hash, requested model, loaded instance ID when
 available, preset, context cap, template version, temperature, output-token
 budget, word measurement rule, source/output hashes, timestamps and duration.
 Render receipts record model filenames by loader node, the base and submitted
@@ -125,6 +127,11 @@ causes a fresh render. Model filenames and identifiers do not prove identical
 weight contents. GPU kernels, provider versions and model updates can still
 change a live result; the metadata documents the inputs, not a guarantee of
 bit-identical diffusion output.
+
+`COMFYUI_WIDTH`, `COMFYUI_HEIGHT`, `COMFYUI_STEPS` and `COMFYUI_CFG` default to
+1024, 1024, 10 and 1 for Z-Image Turbo. They are applied to the submitted workflow,
+recorded in receipts, used for output filenames and checked against decoded image
+dimensions. The bundled SD 1.5 alternative needs 512, 512, 10 and 7.
 
 The prompt limit is **50 whitespace-separated words**, using Python
 `str.split()`. It does not estimate LM Studio or diffusion-model tokens. The
@@ -187,6 +194,8 @@ configuration, durable publication checkpoints, confirmation persistence
 failure, reconciliation and deterministic offline outputs. The pinned
 publishing submodule's suite runs in a separate Python process.
 
-Live LM Studio, ComfyUI, object storage and Meta compatibility still require an
-operator smoke test with the intended configuration. The automated workflow
-never publishes a real image.
+Live small-model LM Studio, Ollama and ComfyUI tests have passed; see the
+[recorded setup, results and limits](live-smoke-test.md). Test the intended
+production models and review their images separately. Object storage and Meta
+compatibility still require an operator smoke test with the intended credentials.
+The automated workflow never publishes a real image.

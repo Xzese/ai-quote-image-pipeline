@@ -8,13 +8,13 @@
 </p>
 
 A local-first Python pipeline for turning quotes into AI-generated social images.
-It uses LM Studio for prompt and hashtag generation, ComfyUI for image rendering,
+It uses LM Studio or Ollama for prompt and hashtag generation, ComfyUI for image rendering,
 and can optionally publish completed images to Instagram.
 
 ## What the pipeline does
 
 1. Pull quote data from Quotable into a local JSON corpus.
-2. Generate prompt text + hashtags through LM Studio for each quote.
+2. Generate prompt text + hashtags through the selected local LLM for each quote.
 3. Render images in ComfyUI and overlay quote text.
 4. Optionally post one generated image via `upload_photo` integration.
 
@@ -89,6 +89,7 @@ OVERLAY_OUTPUT_PATH=output/images_text_overlay
 ### LM Studio configuration
 
 ```ini
+LLM_PROVIDER=lm_studio
 LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
 LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=qwen/qwen3.5-9b
@@ -99,12 +100,37 @@ LM_STUDIO_NATIVE_API_BASE_URL=
 LM_STUDIO_CONTEXT_LENGTH=8192
 ```
 
+### Ollama configuration
+
+Start Ollama and install a chat model, for example `ollama pull qwen3:0.6b`.
+Then select it in `.env`:
+
+```ini
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3:0.6b
+OLLAMA_CONTEXT_LENGTH=8192
+```
+
+The same pipeline and stage commands work with either provider. Ollama uses its
+native [structured-output API](https://docs.ollama.com/capabilities/structured-outputs)
+for the readiness check, visual prompts and hashtags. The model must already be
+installed and support chat/completion; embedding models are rejected. Thinking is
+disabled for models that advertise that capability. Requests have a bounded
+timeout and support cancellation. There is no automatic provider fallback or
+model download. Ollama manages model residency through its five-minute keep-alive;
+the pipeline never unloads another caller's Ollama model.
+
 ### ComfyUI configuration
 
 ```ini
 COMFYUI_URL=http://127.0.0.1:8000
 COMFYUI_WORKFLOW_PATH=workflows/image_z_image_turbo.json
 COMFYUI_DEADLINE_SECONDS=300
+COMFYUI_WIDTH=1024
+COMFYUI_HEIGHT=1024
+COMFYUI_STEPS=10
+COMFYUI_CFG=1
 GENERATION_SEED=42
 ```
 
@@ -209,7 +235,7 @@ setting and the model-reported maximum context length.
 
 ## ComfyUI
 
-[ComfyUI](https://comfy.org/) renders the image workflow after LM Studio has
+[ComfyUI](https://comfy.org/) renders the image workflow after the selected LLM has
 generated the visual prompt. Use the
 [official ComfyUI documentation](https://docs.comfy.org/) for installation and
 local API guidance, and the
@@ -229,6 +255,14 @@ for an explanation of node-based workflows.
 `GENERATION_SEED` defaults to `42` and is recorded with the actual workflow and
 model filenames. `COMFYUI_DEADLINE_SECONDS` bounds submission, polling and download
 for each image. The project uses the local ComfyUI API.
+
+For a smaller smoke test, `workflows/image_sd15.json` uses separate fp16 Stable
+Diffusion 1.5 components and standard ComfyUI nodes. Set width/height to `512`,
+steps to `10` and CFG to `7`. Dimensions must be positive multiples of eight;
+CFG accepts decimals. See [the live smoke-test setup and results](docs/live-smoke-test.md)
+for the model filenames, download commands and tested versions. A small LLM and
+ten diffusion steps are suitable for checking connectivity, not assessing final
+quote relevance or publication quality.
 
 ## Run order
 

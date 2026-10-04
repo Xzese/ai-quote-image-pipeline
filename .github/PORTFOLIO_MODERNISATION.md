@@ -1,8 +1,9 @@
 # AI pipeline maturity pass
 
 The implementation now covers the planned workflow semantics and reproducibility
-work. Keep the PR in draft until the intended live-provider smoke tests and
-human image-quality review have been completed.
+work. Small-model LM Studio, Ollama and ComfyUI generation smoke tests passed.
+Keep the PR in draft until the intended production-model image-quality review
+and optional object-storage/Meta smoke tests have been completed.
 
 - Explicit prompt, render and publishing outcomes, partial-success reporting and exit codes.
 - Completed-artefact receipts, cache invalidation and publication eligibility.
@@ -15,6 +16,7 @@ human image-quality review have been completed.
 - One overall ComfyUI submission/poll/download deadline, including slow response bodies.
 - Hardened publisher integration, readiness polling and redacted notifications.
 - Updated hashed dependency pins with the unused vulnerable tokenizer dependency removed.
+- Selectable Ollama native structured chat and a small SD 1.5 image workflow.
 
 See [workflow documentation](../docs/workflow.md) for the contracts, migration
 instructions, recovery commands and validation boundaries. CI retains both

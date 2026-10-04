@@ -173,6 +173,28 @@ def derive_native_api_base_url(openai_base_url: str) -> str:
 def _load_prompt_settings():
     load_project_env()
 
+    provider = get_env_str("LLM_PROVIDER", "lm_studio")
+    if provider not in ("lm_studio", "ollama"):
+        raise ConfigurationError("LLM_PROVIDER must be lm_studio or ollama.")
+    if provider == "ollama":
+        context_length = get_env_int("OLLAMA_CONTEXT_LENGTH", 8192)
+        if context_length is None or context_length < 1:
+            raise ConfigurationError("OLLAMA_CONTEXT_LENGTH must be at least 1.")
+        base_url = get_env_str("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        model_name = get_env_str("OLLAMA_MODEL", "qwen3:0.6b")
+        if not base_url or not model_name:
+            raise ConfigurationError(
+                "OLLAMA_BASE_URL and OLLAMA_MODEL cannot be blank."
+            )
+        return {
+            "provider": provider,
+            "base_url": base_url.rstrip("/"),
+            "model_name": model_name,
+            "preset": "",
+            "context_length": context_length,
+            "quotes_file_path": get_required_file_path("QUOTES_FILE_PATH"),
+        }
+
     base_url = get_env_str("LM_STUDIO_BASE_URL", default=DEFAULT_LM_STUDIO_BASE_URL)
     native_api_base_url = get_env_str("LM_STUDIO_NATIVE_API_BASE_URL")
     api_key = get_env_str("LM_STUDIO_API_KEY", default=DEFAULT_LM_STUDIO_API_KEY)
@@ -213,6 +235,7 @@ def _load_prompt_settings():
         raise ConfigurationError("LM_STUDIO_PARALLEL_WORKERS must be at least 1.")
 
     return {
+        "provider": provider,
         "base_url": base_url,
         "native_api_base_url": native_api_base_url.rstrip("/"),
         "api_key": api_key,
@@ -635,6 +658,8 @@ def _unload_lm_studio_model(
 
 
 def _validate_lm_studio_readiness(*, client, model_name: str, preset: str) -> None:
+    # Retain the old helper name for callers; both providers use the same probe.
+    provider = getattr(type(client), "provider_name", "LM Studio")
     normalized_model_name = _normalize_model_name(model_name)
     attempt = 0
     while attempt < MODEL_READINESS_RETRY_ATTEMPTS:
@@ -656,14 +681,16 @@ def _validate_lm_studio_readiness(*, client, model_name: str, preset: str) -> No
                 expected_type=str,
             )
             break
+        except InterruptedError:
+            raise
         except Exception as exc:
             if not is_stale_lm_studio_readiness_error(exc):
                 raise RuntimeError(
-                    f"LM Studio model/structured-output check failed: {exc}"
+                    f"{provider} model/structured-output check failed: {exc}"
                 ) from exc
             if attempt >= MODEL_READINESS_RETRY_ATTEMPTS:
                 raise RuntimeError(
-                    f"LM Studio model/structured-output check failed: {exc}"
+                    f"{provider} model/structured-output check failed: {exc}"
                 ) from exc
             if stop_event.wait(MODEL_READINESS_RETRY_DELAY_SECONDS):
                 raise InterruptedError(
@@ -672,7 +699,7 @@ def _validate_lm_studio_readiness(*, client, model_name: str, preset: str) -> No
 
     if startup_response["status"] != "ok":
         raise RuntimeError(
-            "LM Studio structured-output check returned an invalid readiness status."
+            f"{provider} structured-output check returned an invalid readiness status."
         )
 
 
@@ -688,6 +715,19 @@ def call_model(
 ) -> dict:
     if stop_event.is_set():
         raise InterruptedError("Shutdown requested before model call")
+
+    if getattr(type(client), "call_structured", None) is not None:
+        try:
+            content = client.call_structured(
+                messages=messages, model=model_name, response_format=response_format
+            )
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            raise RuntimeError("Ollama structured request failed.") from exc
+        return _parse_structured_content(
+            content, expected_field, expected_type, "Ollama"
+        )
 
     try:
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
@@ -725,22 +765,28 @@ def call_model(
         raise RuntimeError("LM Studio response is missing choices.")
 
     content = getattr(choices[0].message, "content", None)
+    return _parse_structured_content(
+        content, expected_field, expected_type, "LM Studio"
+    )
+
+
+def _parse_structured_content(content, expected_field, expected_type, provider):
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("LM Studio response content is empty.")
+        raise RuntimeError(f"{provider} response content is empty.")
 
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("LM Studio response content is not valid JSON.") from exc
+        raise RuntimeError(f"{provider} response content is not valid JSON.") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("LM Studio structured response must be a JSON object.")
+        raise RuntimeError(f"{provider} structured response must be a JSON object.")
     if expected_field not in parsed:
         raise RuntimeError(
-            f"LM Studio structured response is missing {expected_field!r}."
+            f"{provider} structured response is missing {expected_field!r}."
         )
     if not isinstance(parsed[expected_field], expected_type):
         raise RuntimeError(
-            f"LM Studio structured response field {expected_field!r} has the wrong type."
+            f"{provider} structured response field {expected_field!r} has the wrong type."
         )
 
     return parsed
@@ -800,6 +846,8 @@ def generate_prompt(
                 expected_field="prompt",
                 expected_type=str,
             )
+        except InterruptedError:
+            raise
         except Exception as error:
             log(
                 f"Item {item_index}, prompt attempt {attempt}: model call failed: {error}"
@@ -816,6 +864,8 @@ def generate_prompt(
 
         try:
             number_of_tokens = len(tokenizer.tokenize(prompt))
+        except InterruptedError:
+            raise
         except Exception as error:
             log(
                 f"Item {item_index}, prompt attempt {attempt}: tokenization failed: {error}"
@@ -874,6 +924,8 @@ def generate_hashtags(item, item_index, *, client, model_name: str, preset: str)
                 expected_field="hashtags",
                 expected_type=list,
             )
+        except InterruptedError:
+            raise
         except Exception as error:
             log(
                 f"Item {item_index}, hashtag attempt {attempt}: model call failed: {error}"
