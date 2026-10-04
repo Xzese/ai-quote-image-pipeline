@@ -289,6 +289,10 @@ PIPELINE_MODE=per_quote
 You can also override it for one run with `--mode per_quote` or `--mode batch`.
 Both modes fetch quotes first. An unchanged quote retains its generated prompt
 and hashtags on refresh, so matching receipts continue to skip completed work.
+Quotes no longer returned by the source remain in the corpus with their generated
+fields. Existing order is preserved, matching IDs are updated, and new IDs are
+appended. A refresh never removes saved quotes, including when the source returns
+an empty list.
 Fetch failures leave the saved corpus intact and stop generation.
 
 Use `--skip-fetch` or `PIPELINE_FETCH_QUOTES=false` to use an existing corpus,

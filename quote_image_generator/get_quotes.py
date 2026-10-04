@@ -98,16 +98,15 @@ def write_quotes(path, quotes: list[dict[str, Any]]) -> None:
 
 
 def merge_quotes(previous, fetched):
-    """Refresh source data while retaining outputs only for unchanged quotes."""
+    """Update known quotes and append new ones without deleting absent records."""
     existing = {r["_id"]: r for r in validate_quote_records(previous)}
-    merged = []
     for record in validate_quote_records(fetched):
         record = {k: v for k, v in record.items() if k not in ("prompt", "hashtags")}
         old = existing.get(record["_id"], {})
         if all(old.get(k) == record[k] for k in ("_id", "content", "author")):
             record.update({k: old[k] for k in ("prompt", "hashtags") if k in old})
-        merged.append(record)
-    return merged
+        existing[record["_id"]] = record
+    return list(existing.values())
 
 
 def retrieve_quotes(stop_event=None):

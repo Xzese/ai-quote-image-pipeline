@@ -177,3 +177,39 @@ def test_standalone_refresh_retains_unchanged_generated_fields(tmp_path, monkeyp
     )
     assert get_quotes.main() == 0
     assert json.loads(corpus.read_text())[0]["prompt"] == "sunlit path"
+
+
+def test_standalone_refresh_keeps_absent_quotes_and_updates_without_duplicates(
+    tmp_path, monkeypatch
+):
+    corpus = tmp_path / "quotes.json"
+    absent = {
+        "_id": "absent",
+        "content": "Keep this quote.",
+        "author": "Fixture",
+        "prompt": "sunlit path",
+        "hashtags": "#keep",
+        "tags": ["custom"],
+    }
+    previous = [
+        absent,
+        {
+            "_id": "updated",
+            "content": "Old text.",
+            "author": "Fixture",
+            "prompt": "old sky",
+            "hashtags": "#old",
+        },
+    ]
+    corpus.write_text(json.dumps(previous))
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(corpus))
+    fetched = [
+        {"_id": "updated", "content": "New text.", "author": "Fixture"},
+        {"_id": "new", "content": "Begin.", "author": "Fixture"},
+    ]
+    monkeypatch.setattr(get_quotes, "fetch_quotes", lambda **_: fetched)
+    assert get_quotes.main() == 0
+    refreshed = json.loads(corpus.read_text())
+    assert refreshed == [absent, *fetched]
+    assert get_quotes.main() == 0
+    assert json.loads(corpus.read_text()) == refreshed

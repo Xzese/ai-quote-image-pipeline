@@ -30,7 +30,10 @@ Quote fetching defaults on for the complete live run. Set
 `PIPELINE_FETCH_QUOTES=false` or pass `--skip-fetch` to use a saved/custom corpus.
 `QUOTES_ENDPOINT_URL` selects the quote source. A refresh validates all pages
 before replacing the corpus and retains generated fields only when ID, content
-and author match. Changed quotes are regenerated through the normal receipt
+and author match. Saved quotes absent from the response remain unchanged, including
+their generated fields and matching receipts. Existing order is preserved and
+new IDs are appended; an empty response retains the whole saved corpus.
+Changed quotes are regenerated through the normal receipt
 checks. Fetch failures or cancellation leave the corpus intact and stop the run.
 Keep `.state.json` alongside it to preserve stage receipts and publication claims.
 

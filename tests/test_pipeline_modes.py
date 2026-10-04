@@ -113,6 +113,34 @@ def test_default_batch_refresh_preserves_cache_across_mode_changes(tmp_path):
     assert third["exit_code"] == 0 and events == ["prompt:two", "render:two"]
 
 
+@pytest.mark.parametrize("fetched", [QUOTES[:1], []])
+def test_absent_quotes_keep_completed_receipts_and_images(tmp_path, fetched):
+    corpus = tmp_path / "quotes.json"
+    prompt, render = callbacks(tmp_path, [])
+    assert (
+        pipeline.run_workflow(
+            corpus, fetch=lambda: QUOTES, prompt=prompt, render=render
+        )["exit_code"]
+        == 0
+    )
+    previous = json.loads(corpus.read_text())
+    state = Path(str(corpus) + ".state.json").read_bytes()
+    images = {path.name: path.read_bytes() for path in tmp_path.glob("*.jpeg")}
+    result = pipeline.run_workflow(
+        corpus,
+        fetch=lambda: fetched,
+        prompt=Mock(side_effect=AssertionError()),
+        render=Mock(side_effect=AssertionError()),
+    )
+    assert result["exit_code"] == 0 and result["fetch"]["records"] == 2
+    assert all(
+        item["prompt"] == item["render"] == "skipped" for item in result["items"]
+    )
+    assert json.loads(corpus.read_text()) == previous
+    assert Path(str(corpus) + ".state.json").read_bytes() == state
+    assert {path.name: path.read_bytes() for path in tmp_path.glob("*.jpeg")} == images
+
+
 @pytest.mark.parametrize(
     "failure", [RuntimeError("private response"), ValueError("bad payload")]
 )
