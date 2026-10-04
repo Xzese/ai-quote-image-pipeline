@@ -159,6 +159,7 @@ ACCESS_TOKEN=
 ACCESS_TOKEN_EXPIRY=
 IG_BUSINESS_USER_ID=
 LOG_FILE=output/instagram.log
+LEGACY_IMAGE_AUTO_IMPORT=true
 
 # Optional remote Facebook token provider
 FACEBOOK_TOKEN_API_BASE_URL=
@@ -184,6 +185,22 @@ Posting credentials are optional unless you request publishing. Publication is
 attempted once; an unconfirmed outcome is stored durably and requires operator
 reconciliation. Optional SMTP settings send a redacted notification. See the
 [workflow contracts and recovery guide](docs/workflow.md).
+
+The first publish-only run automatically imports existing `1024x1024` JPEGs
+whose filenames match quote IDs and whose records contain prompts and hashtags.
+It records verified file hashes and legacy provenance without regenerating or
+modifying images. Existing receipts and publication history are preserved.
+Set `LEGACY_IMAGE_AUTO_IMPORT=false` to disable this migration. Preview or run
+the standalone importer inside the container, using its `/app` checkout:
+
+```bash
+python -m quote_image_generator.legacy_import --dry-run
+python -m quote_image_generator.legacy_import
+```
+
+The standalone importer never retrieves tokens or publishes. Keep a backup
+until the migrated setup has been verified. Previous posts absent from the
+publication journal cannot be inferred from the image files.
 
 #### Remote Facebook token provider
 
@@ -333,7 +350,7 @@ python -m quote_image_generator.pipeline --offline --output output/demo
 The runner emits a JSON summary and saves durable stage receipts beside the
 quote corpus. Completed stages are reused only while their inputs and artefacts
 match. Partial success exits nonzero while retaining successful work. Existing
-images without receipts must be regenerated. Read the
+images can be adopted by the one-time legacy importer above. Read the
 [workflow and evaluation guide](docs/workflow.md) for exit codes, reproducibility
 metadata, the fixed evaluation corpus, deadline behaviour and recovery commands.
 
