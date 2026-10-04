@@ -8,7 +8,7 @@ import dotenv
 
 T = TypeVar("T")
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ConfigurationError(ValueError):

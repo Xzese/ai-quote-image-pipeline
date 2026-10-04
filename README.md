@@ -44,12 +44,20 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
 python -m pip install --upgrade pip
 python -m pip install --require-hashes -r requirements-lock.txt
+python -m pip install --no-deps --no-build-isolation -e .
 ```
 
 `requirements-lock.txt` pins and hashes the complete root, development, and
 optional upload dependency set for reproducible Python 3.11+ installs. This
 project uses Python's standard-library `smtplib`; no separate SMTP package is
 required.
+
+The second install command registers the local project in editable mode using
+the build tools already pinned in the lockfile. Run it once after cloning or
+updating to the `src` layout. Existing `python -m quote_image_generator...`
+commands then work without setting `PYTHONPATH`. This application runs from its
+checkout: `.env`, assets, workflows, fixtures and outputs resolve relative to the
+repository root, including when a command starts from another directory.
 
 After intentionally changing a requirements file, regenerate the lock:
 
@@ -62,11 +70,15 @@ python -m piptools compile --allow-unsafe --generate-hashes \
 ## Repository layout
 
 ```text
-quote_image_generator/   # Python package and executable modules
+src/
+  quote_image_generator/ # Application package and executable modules
+tests/                   # Application tests
+pyproject.toml           # Editable installation and test discovery
 assets/fonts/            # Bundled Alegreya font
 workflows/               # ComfyUI workflow JSON
+fixtures/                # Authored evaluation corpus
+docs/                    # Workflow contracts and smoke-test instructions
 licenses/                # Third-party licence texts
-tests/                   # Unit tests
 upload_photo/            # Optional Instagram posting submodule
 output/                  # Generated local data, ignored by Git
 ```

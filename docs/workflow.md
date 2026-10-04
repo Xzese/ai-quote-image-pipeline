@@ -1,5 +1,10 @@
 # Workflow outcomes and reproducibility
 
+Install the locked dependencies and editable project as described in the
+[setup guide](../README.md#setup-and-install). The application package lives in
+`src/quote_image_generator/`; `.env`, fonts, workflows and fixtures stay at the
+repository root.
+
 Run the complete local workflow with:
 
 ```bash
