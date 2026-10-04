@@ -84,6 +84,9 @@ cp .env.example .env
 QUOTES_FILE_PATH=output/quotes.json
 OUTPUT_IMAGE_PATH=output/images
 OVERLAY_OUTPUT_PATH=output/images_text_overlay
+PIPELINE_MODE=batch
+PIPELINE_FETCH_QUOTES=true
+QUOTES_ENDPOINT_URL=http://api.quotable.io/quotes
 ```
 
 ### LM Studio configuration
@@ -118,8 +121,9 @@ for the readiness check, visual prompts and hashtags. The model must already be
 installed and support chat/completion; embedding models are rejected. Thinking is
 disabled for models that advertise that capability. Requests have a bounded
 timeout and support cancellation. There is no automatic provider fallback or
-model download. Ollama manages model residency through its five-minute keep-alive;
-the pipeline never unloads another caller's Ollama model.
+model download. In batch mode, the pipeline checks Ollama's running models before
+generation and unloads its newly loaded model before rendering. Pre-existing
+loaded models remain untouched. Per-quote mode uses a five-minute keep-alive.
 
 ### ComfyUI configuration
 
@@ -266,15 +270,38 @@ quote relevance or publication quality.
 
 ## Run order
 
-Fetch the quote corpus, then run prompt generation and rendering together:
+Start the complete workflow with one command:
 
 ```bash
-python -m quote_image_generator.get_quotes
 python -m quote_image_generator.pipeline
 ```
 
+By default, `PIPELINE_MODE=batch` refreshes the quote corpus, generates prompts
+and hashtags for **all quotes**, releases the text model loaded by this run, then
+renders and overlays **all images**. Work remains sequential within each stage.
+
+To generate a prompt and image for each quote before moving to the next, set:
+
+```ini
+PIPELINE_MODE=per_quote
+```
+
+You can also override it for one run with `--mode per_quote` or `--mode batch`.
+Both modes fetch quotes first. An unchanged quote retains its generated prompt
+and hashtags on refresh, so matching receipts continue to skip completed work.
+Fetch failures leave the saved corpus intact and stop generation.
+
+Use `--skip-fetch` or `PIPELINE_FETCH_QUOTES=false` to use an existing corpus,
+including custom quotes or a test sample:
+
+```bash
+python -m quote_image_generator.pipeline --skip-fetch
+```
+
 The individual `get_prompt`, `get_image`, and `upload_quote_photo` entry points
-remain available. They use the same receipts and locks. Review completed images
+remain available, as does `get_quotes` for a standalone refresh. Explicit
+`--stage prompt`, `--stage render` and `--stage publish` use the saved corpus and
+never fetch quotes. They use the same receipts and locks. Review completed images
 before running the optional publishing stage:
 
 ```bash

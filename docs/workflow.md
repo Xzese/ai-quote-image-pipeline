@@ -14,7 +14,37 @@ python -m quote_image_generator.pipeline --stage publish
 
 `--publish` enables one post at the end of a complete run. The existing
 `get_prompt`, `get_image`, and `upload_quote_photo` modules call the same runner
-for their respective stages. Quote retrieval remains a separate step.
+for their respective stages. The full live run fetches quotes first; explicit
+stage commands use the saved corpus.
+
+## Processing order
+
+`PIPELINE_MODE=batch` is the default: fetch the corpus, generate every prompt and
+hashtag set, release the text model loaded by this run, then render every image.
+This avoids alternating the two model types for every quote. `PIPELINE_MODE=per_quote`
+instead runs prompt → render for one quote before starting the next. Both modes
+are sequential and optionally publish one eligible image after generation.
+`--mode batch` and `--mode per_quote` override `.env` for one command.
+
+Quote fetching defaults on for the complete live run. Set
+`PIPELINE_FETCH_QUOTES=false` or pass `--skip-fetch` to use a saved/custom corpus.
+`QUOTES_ENDPOINT_URL` selects the quote source. A refresh validates all pages
+before replacing the corpus and retains generated fields only when ID, content
+and author match. Changed quotes are regenerated through the normal receipt
+checks. Fetch failures or cancellation leave the corpus intact and stop the run.
+Keep `.state.json` alongside it to preserve stage receipts and publication claims.
+
+The corpus and output locks remain held across fetching, both generation phases
+and the optional publication. Batch handoff failure blocks rendering and publishing,
+preserves completed prompt receipts, and exits nonzero. Successful prompts still
+render when other quotes' prompt generation fails.
+
+LM Studio unloads only instances this run loaded. In batch mode Ollama checks
+`/api/ps` before its first request and releases a model it newly loaded with the
+[native unload request](https://docs.ollama.com/api/generate). Pre-existing loaded
+models stay loaded. Ollama lifecycle actions share a checkout-local service lock;
+unrelated clients need external coordination. Per-quote Ollama requests retain
+the five-minute keep-alive. ComfyUI controls its own image-model residency.
 
 ## Outcomes and exit codes
 
@@ -45,7 +75,9 @@ Ollama requests use the same terminable HTTP transport as ComfyUI.
 
 The final stdout line is the JSON run summary. It includes per-item outcomes,
 status counts, elapsed time, prompt word counts, completed prompt count, eligible
-render count, and `human_review_required`. Prompt diagnostics use stderr.
+render count, processing mode, optional fetch/model-release outcomes, and
+`human_review_required`. Counts include these run-level outcomes when present.
+Quote and prompt diagnostics use stderr.
 
 ## Local state and coordination
 
@@ -177,7 +209,7 @@ rather than modifying the fixture:
 ```bash
 mkdir -p output
 cp fixtures/evaluation.json output/evaluation.json
-QUOTES_FILE_PATH=output/evaluation.json python -m quote_image_generator.pipeline
+QUOTES_FILE_PATH=output/evaluation.json python -m quote_image_generator.pipeline --skip-fetch
 ```
 
 Compare completion counts, failures, per-stage durations, word counts and

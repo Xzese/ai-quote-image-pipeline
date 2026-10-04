@@ -150,6 +150,62 @@ def test_generation_cancellation_does_not_retry(stage, monkeypatch):
     assert call.call_count == 1
 
 
+@pytest.mark.parametrize(
+    "loaded,should_unload",
+    [
+        ([], True),
+        ([{"name": "small:latest"}], False),
+        ([{"model": "small"}], False),
+        ([{"name": "another:latest"}], True),
+    ],
+)
+def test_batch_releases_only_model_not_previously_loaded(
+    loaded, should_unload, monkeypatch
+):
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if url.endswith("/api/show"):
+            return response({"capabilities": ["completion"]})
+        if url.endswith("/api/ps"):
+            return response({"models": loaded})
+        if url.endswith("/api/generate"):
+            return response({"done": True, "done_reason": "unload"})
+        return response({"done": True, "message": {"content": '{"status":"ok"}'}})
+
+    monkeypatch.setattr(ollama, "request", request)
+    stop = threading.Event()
+    client = ollama.OllamaClient(
+        "http://localhost:11434", 2048, stop, release_on_close=True
+    )
+    client.call_structured(
+        messages=[], model="small", response_format=get_prompt.READINESS_RESPONSE_FORMAT
+    )
+    stop.set()  # Cleanup still runs after cancellation.
+    client.close()
+    client.close()
+    unloads = [call for call in calls if call[1].endswith("/api/generate")]
+    assert len(unloads) == int(should_unload)
+    if unloads:
+        assert unloads[0][2]["json"]["keep_alive"] == 0
+        assert "stop_event" not in unloads[0][2]
+
+
+def test_batch_requires_unload_confirmation(monkeypatch):
+    client = ollama.OllamaClient(
+        "http://localhost:11434", 2048, threading.Event(), release_on_close=True
+    )
+    client.owned_model = "small"
+    monkeypatch.setattr(
+        ollama,
+        "request",
+        lambda *_, **__: response({"done": True, "done_reason": "stop"}),
+    )
+    with pytest.raises(ValueError, match="confirm model unloading"):
+        client.close()
+
+
 def test_ollama_pipeline_receipts_cache_and_no_lm_lifecycle(tmp_path, monkeypatch):
     corpus = tmp_path / "quotes.json"
     corpus.write_text(

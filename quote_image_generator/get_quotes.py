@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import json
 from typing import Any
 
 import requests
@@ -58,6 +59,7 @@ def fetch_quotes(
     endpoint_url: str = DEFAULT_ENDPOINT_URL,
     page_limit: int = DEFAULT_PAGE_LIMIT,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    stop_event=None,
 ) -> list[dict[str, Any]]:
     if page_limit <= 0:
         raise ValueError("page_limit must be greater than zero.")
@@ -67,7 +69,9 @@ def fetch_quotes(
     quotes: list[dict[str, Any]] = []
 
     while current_page <= total_pages:
-        print(f"Page Number: {current_page}")
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("Quote retrieval cancelled.")
+        print(f"Page Number: {current_page}", file=sys.stderr)
         results, total_pages = fetch_quotable_page(
             session=session,
             endpoint_url=endpoint_url,
@@ -78,12 +82,47 @@ def fetch_quotes(
         quotes.extend(results)
         current_page += 1
 
+    if stop_event is not None and stop_event.is_set():
+        raise InterruptedError("Quote retrieval cancelled.")
     return quotes
 
 
 def write_quotes(path, quotes: list[dict[str, Any]]) -> None:
     with corpus_lock(path):
-        atomic_json(path, quotes)
+        previous = (
+            json.loads(Path(path).read_text(encoding="utf-8"))
+            if Path(path).exists()
+            else []
+        )
+        atomic_json(path, merge_quotes(previous, quotes))
+
+
+def merge_quotes(previous, fetched):
+    """Refresh source data while retaining outputs only for unchanged quotes."""
+    existing = {r["_id"]: r for r in validate_quote_records(previous)}
+    merged = []
+    for record in validate_quote_records(fetched):
+        record = {k: v for k, v in record.items() if k not in ("prompt", "hashtags")}
+        old = existing.get(record["_id"], {})
+        if all(old.get(k) == record[k] for k in ("_id", "content", "author")):
+            record.update({k: old[k] for k in ("prompt", "hashtags") if k in old})
+        merged.append(record)
+    return merged
+
+
+def retrieve_quotes(stop_event=None):
+    endpoint = get_env_str("QUOTES_ENDPOINT_URL") or DEFAULT_ENDPOINT_URL
+    with requests.Session() as session:
+        quotes = fetch_quotes(
+            session=session, endpoint_url=endpoint, stop_event=stop_event
+        )
+    quotes, duplicates = deduplicate_quotes_by_id(quotes)
+    if duplicates:
+        print(
+            f"Warning: Removed {duplicates} duplicate quote record(s) before validation.",
+            file=sys.stderr,
+        )
+    return validate_quote_records(quotes)
 
 
 def deduplicate_quotes_by_id(
@@ -112,19 +151,7 @@ def main() -> int:
 
     try:
         quotes_file_path = get_required_file_path("QUOTES_FILE_PATH")
-        endpoint_url = get_env_str("QUOTES_ENDPOINT_URL") or DEFAULT_ENDPOINT_URL
-
-        with requests.Session() as session:
-            quote_list = fetch_quotes(session=session, endpoint_url=endpoint_url)
-
-        quote_list, duplicate_count = deduplicate_quotes_by_id(quote_list)
-        if duplicate_count:
-            print(
-                f"Warning: Removed {duplicate_count} duplicate quote record(s) before validation."
-            )
-
-        validated_quotes = validate_quote_records(quote_list)
-        write_quotes(quotes_file_path, validated_quotes)
+        write_quotes(quotes_file_path, retrieve_quotes())
     except RunBusy:
         print("Another run owns this quote corpus.", file=sys.stderr)
         return 75

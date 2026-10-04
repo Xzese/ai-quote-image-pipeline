@@ -16,7 +16,7 @@ from quote_image_generator.run_state import (
 )
 
 
-def demo(output):
+def demo(output, mode="batch"):
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     fixtures = json.loads(
@@ -58,6 +58,7 @@ def demo(output):
 
     return run_workflow(
         corpus,
+        mode=mode,
         prompt=prompt,
         render=render,
         prompt_metadata={

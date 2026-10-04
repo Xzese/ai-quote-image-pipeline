@@ -17,6 +17,8 @@ and optional object-storage/Meta smoke tests have been completed.
 - Hardened publisher integration, readiness polling and redacted notifications.
 - Updated hashed dependency pins with the unused vulnerable tokenizer dependency removed.
 - Selectable Ollama native structured chat and a small SD 1.5 image workflow.
+- Default fetch → all prompts → owned-model release → all renders, with an
+  optional per-quote order and cache-preserving source refreshes.
 
 See [workflow documentation](../docs/workflow.md) for the contracts, migration
 instructions, recovery commands and validation boundaries. CI retains both

@@ -1,4 +1,5 @@
 import json
+import threading
 
 import requests
 
@@ -136,3 +137,43 @@ def test_main_returns_config_error_when_quotes_file_missing(monkeypatch):
     monkeypatch.delenv("QUOTES_FILE_PATH", raising=False)
 
     assert get_quotes.main() == 1
+
+
+def test_cancellation_stops_between_pages():
+    stop = threading.Event()
+    calls = []
+
+    class Session:
+        def get(self, *args, **kwargs):
+            calls.append(kwargs["params"]["page"])
+            stop.set()
+            return _MockResponse({"results": [], "totalPages": 2})
+
+    with pytest.raises(InterruptedError):
+        get_quotes.fetch_quotes(Session(), stop_event=stop)
+    assert calls == [1]
+
+
+def test_standalone_refresh_retains_unchanged_generated_fields(tmp_path, monkeypatch):
+    corpus = tmp_path / "quotes.json"
+    corpus.write_text(
+        json.dumps(
+            [
+                {
+                    "_id": "a",
+                    "content": "Begin.",
+                    "author": "Fixture",
+                    "prompt": "sunlit path",
+                    "hashtags": "#begin",
+                }
+            ]
+        )
+    )
+    monkeypatch.setenv("QUOTES_FILE_PATH", str(corpus))
+    monkeypatch.setattr(
+        get_quotes,
+        "fetch_quotes",
+        lambda **_: [{"_id": "a", "content": "Begin.", "author": "Fixture"}],
+    )
+    assert get_quotes.main() == 0
+    assert json.loads(corpus.read_text())[0]["prompt"] == "sunlit path"

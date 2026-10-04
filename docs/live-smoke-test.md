@@ -27,6 +27,12 @@ an NVIDIA RTX 5060 Ti (16 GB), using Python 3.11.16 for this project:
   the run. Ollama never called LM Studio's model-management endpoints.
 - With all three test servers stopped, both seven-record reruns succeeded and
   skipped all prompt/render stages. All 14 JPEG hashes stayed unchanged.
+- The updated default batch orchestration was also tested with both real LLM
+  providers and ComfyUI against a controlled two-quote HTTP source. Observed order
+  was fetch → both prompts → model release → both renders. Provider model-list
+  checks confirmed the owned text model was unloaded before each render began.
+  The per-quote Ollama test observed fetch → prompt/image → prompt/image instead.
+  Refreshing the same two records then reused all prompt/render receipts.
 
 These results establish local API integration, validation, rendering, overlays
 and receipt reuse under this configuration. The 0.6B model often repeated generic
@@ -79,7 +85,7 @@ Start Ollama (`ollama serve`, if it is not already running), then:
 ollama pull qwen3:0.6b
 export LLM_PROVIDER=ollama
 export OLLAMA_MODEL=qwen3:0.6b OLLAMA_CONTEXT_LENGTH=2048
-python -m quote_image_generator.pipeline
+python -m quote_image_generator.pipeline --skip-fetch
 ```
 
 The native `/api/show` check rejects embedding-only models. `/api/chat` uses a
@@ -97,7 +103,7 @@ Install a Qwen 3 0.6B Q4_K_M GGUF. Use its exact key from `/api/v1/models` or
 ```bash
 export LLM_PROVIDER=lm_studio
 export LM_STUDIO_MODEL=qwen3-0.6b LM_STUDIO_CONTEXT_LENGTH=2048
-python -m quote_image_generator.pipeline
+python -m quote_image_generator.pipeline --skip-fetch
 ```
 
 Changing providers intentionally invalidates the existing prompt and render
@@ -108,5 +114,6 @@ receipts. Use separate test directories when comparing providers.
 Repeat the same command with unchanged configuration. Every prompt and render
 should report `skipped`, and JPEG hashes should stay unchanged. A stronger check
 is to stop only the test servers you started and repeat: valid receipts should
-still succeed without contacting any provider. Keep each corpus's `.state.json`
+still succeed without contacting any provider when using `--skip-fetch`.
+Keep each corpus's `.state.json`
 file when repeating; the `.summary.json` file always describes the latest run.

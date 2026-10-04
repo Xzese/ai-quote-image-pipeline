@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from quote_image_generator.config import (
     get_env_int,
+    get_env_bool,
     get_env_str,
     load_project_env,
     resolve_repo_path,
@@ -81,6 +82,9 @@ def run_workflow(
     corpus,
     *,
     stage="all",
+    mode="batch",
+    fetch=None,
+    after_prompt=None,
     prompt=None,
     render=None,
     publish=None,
@@ -103,139 +107,207 @@ def run_workflow(
         "run_id": uuid4().hex,
         "started_at": now(),
         "stage": stage,
+        "mode": mode,
         "items": [],
         "human_review_required": True,
     }
     stop_event = stop_event or threading.Event()
     try:
         with ExitStack() as locks:
+            if mode not in ("batch", "per_quote"):
+                raise ValueError("PIPELINE_MODE must be batch or per_quote.")
+            if fetch is not None and stage != "all":
+                raise ValueError("Quote fetching requires the complete workflow.")
             locks.enter_context(corpus_lock(corpus))
             for directory in sorted(set(Path(d).resolve() for d in resource_dirs)):
                 locks.enter_context(corpus_lock(directory / ".pipeline"))
-            records = validate_quote_records(
-                json.loads(Path(corpus).read_text(encoding="utf-8"))
-            )
             store = StateStore(corpus)
-            for record in records:
-                outcomes = {"quote_id": record["_id"]}
-                summary["items"].append(outcomes)
-                state = store.item(record)
-                if stop_event.is_set():
-                    outcomes["cancelled"] = "cancelled"
-                    continue
-                if stage in ("all", "prompt"):
-                    metadata = dict(prompt_metadata or {})
-                    fingerprint = prompt_input(record, metadata)
-                    previous = state.get("prompt", {})
-                    if (
-                        previous.get("status") == "completed"
-                        and previous.get("input") == fingerprint
-                        and previous.get("output") == prompt_output(record)
-                    ):
-                        outcomes["prompt"] = "skipped"
-                    else:
-                        state["prompt"] = {
-                            "status": "running",
-                            "input": fingerprint,
-                            "metadata": metadata,
-                        }
-                        state.pop("render", None)
-                        state["prompt"]["started_at"] = now()
-                        store.save()
-                        stage_started = time.monotonic()
-                        try:
-                            generated = prompt(dict(record))
-                            if not generated or not all(
-                                isinstance(generated.get(k), str)
-                                and generated[k].strip()
-                                for k in ("prompt", "hashtags")
-                            ):
-                                raise ValueError(
-                                    "Prompt generation did not complete both fields."
-                                )
-                            validate_generated(generated)
-                            record.update(
-                                {
-                                    k: generated[k].strip()
-                                    for k in ("prompt", "hashtags")
-                                }
-                            )
-                            atomic_json(corpus, records)
-                            state["prompt"].update(
-                                status="completed",
-                                output=prompt_output(record),
-                                completed_at=now(),
-                                generation=generated.get("generation", {}),
-                            )
-                            outcomes["prompt"] = "completed"
-                        except InterruptedError:
-                            state["prompt"]["status"] = outcomes["prompt"] = "cancelled"
-                            stop_event.set()
-                        except Exception:
-                            state["prompt"]["status"] = outcomes["prompt"] = "failed"
-                        state["prompt"]["duration_seconds"] = round(
-                            time.monotonic() - stage_started, 3
-                        )
-                        store.save()
-                if stage in ("all", "render"):
-                    receipt = state.get("prompt", {})
+            if fetch is not None:
+                from quote_image_generator.get_quotes import merge_quotes
+
+                fetch_started = time.monotonic()
+                summary["fetch"] = {"status": "running", "started_at": now()}
+                try:
+                    previous = (
+                        json.loads(Path(corpus).read_text(encoding="utf-8"))
+                        if Path(corpus).exists()
+                        else []
+                    )
+                    validate_quote_records(previous)
                     if stop_event.is_set():
-                        outcomes["render"] = "cancelled"
-                    elif receipt.get("status") != "completed" or receipt.get(
-                        "output"
-                    ) != prompt_output(record):
-                        outcomes["render"] = "blocked"
-                    else:
-                        metadata = dict(render_metadata or {})
-                        fingerprint = render_input(record, state, metadata)
-                        previous = state.get("render", {})
-                        if completed_render(previous, fingerprint):
-                            outcomes["render"] = "skipped"
+                        raise InterruptedError("Quote retrieval cancelled.")
+                    fetched = fetch()
+                    if stop_event.is_set():
+                        raise InterruptedError("Quote retrieval cancelled.")
+                    records = merge_quotes(previous, fetched)
+                    atomic_json(corpus, records)
+                    summary["fetch"].update(status="completed", records=len(records))
+                except InterruptedError:
+                    summary["fetch"]["status"] = "cancelled"
+                except Exception:
+                    summary["fetch"]["status"] = "failed"
+                summary["fetch"]["duration_seconds"] = round(
+                    time.monotonic() - fetch_started, 3
+                )
+                if summary["fetch"]["status"] != "completed":
+                    status = summary["fetch"]["status"]
+                    summary.update(
+                        status=status,
+                        exit_code=130 if status == "cancelled" else 1,
+                        counts={status: 1},
+                        duration_seconds=round(time.monotonic() - started, 3),
+                    )
+                    atomic_json(str(Path(corpus).resolve()) + ".summary.json", summary)
+                    return summary
+            else:
+                records = validate_quote_records(
+                    json.loads(Path(corpus).read_text(encoding="utf-8"))
+                )
+            summary["items"] = [{"quote_id": r["_id"]} for r in records]
+            phases = (
+                ("prompt", "render") if stage == "all" and mode == "batch" else (stage,)
+            )
+            handoff_failed = False
+            for phase in phases:
+                for record, outcomes in zip(records, summary["items"]):
+                    state = store.item(record)
+                    if stop_event.is_set():
+                        outcomes[phase if phase != "all" else "cancelled"] = "cancelled"
+                        continue
+                    if phase in ("all", "prompt"):
+                        metadata = dict(prompt_metadata or {})
+                        fingerprint = prompt_input(record, metadata)
+                        previous = state.get("prompt", {})
+                        if (
+                            previous.get("status") == "completed"
+                            and previous.get("input") == fingerprint
+                            and previous.get("output") == prompt_output(record)
+                        ):
+                            outcomes["prompt"] = "skipped"
                         else:
-                            state["render"] = {
+                            state["prompt"] = {
                                 "status": "running",
                                 "input": fingerprint,
                                 "metadata": metadata,
                             }
-                            state["render"]["started_at"] = now()
+                            state.pop("render", None)
+                            state["prompt"]["started_at"] = now()
                             store.save()
                             stage_started = time.monotonic()
                             try:
-                                result = render(dict(record))
-                                path = Path(result["path"]).resolve()
-                                # Decode the whole image before declaring an artefact complete.
-                                from PIL import Image
-
-                                with Image.open(path) as image:
-                                    image.load()
-                                    if image.format != "JPEG":
-                                        raise ValueError(
-                                            "Final artefact must be a JPEG."
-                                        )
-                                state["render"].update(
-                                    result,
-                                    path=str(path),
-                                    status="completed",
-                                    sha256=file_digest(path),
-                                    completed_at=now(),
+                                generated = prompt(dict(record))
+                                if not generated or not all(
+                                    isinstance(generated.get(k), str)
+                                    and generated[k].strip()
+                                    for k in ("prompt", "hashtags")
+                                ):
+                                    raise ValueError(
+                                        "Prompt generation did not complete both fields."
+                                    )
+                                validate_generated(generated)
+                                record.update(
+                                    {
+                                        k: generated[k].strip()
+                                        for k in ("prompt", "hashtags")
+                                    }
                                 )
-                                outcomes["render"] = "completed"
+                                atomic_json(corpus, records)
+                                state["prompt"].update(
+                                    status="completed",
+                                    output=prompt_output(record),
+                                    completed_at=now(),
+                                    generation=generated.get("generation", {}),
+                                )
+                                outcomes["prompt"] = "completed"
                             except InterruptedError:
-                                state["render"]["status"] = outcomes["render"] = (
+                                state["prompt"]["status"] = outcomes["prompt"] = (
                                     "cancelled"
                                 )
                                 stop_event.set()
                             except Exception:
-                                state["render"]["status"] = outcomes["render"] = (
+                                state["prompt"]["status"] = outcomes["prompt"] = (
                                     "failed"
                                 )
-                            state["render"]["duration_seconds"] = round(
+                            state["prompt"]["duration_seconds"] = round(
                                 time.monotonic() - stage_started, 3
                             )
                             store.save()
+                    if phase in ("all", "render"):
+                        receipt = state.get("prompt", {})
+                        if stop_event.is_set():
+                            outcomes["render"] = "cancelled"
+                        elif (
+                            handoff_failed
+                            or receipt.get("status") != "completed"
+                            or receipt.get("output") != prompt_output(record)
+                        ):
+                            outcomes["render"] = "blocked"
+                        else:
+                            metadata = dict(render_metadata or {})
+                            fingerprint = render_input(record, state, metadata)
+                            previous = state.get("render", {})
+                            if completed_render(previous, fingerprint):
+                                outcomes["render"] = "skipped"
+                            else:
+                                state["render"] = {
+                                    "status": "running",
+                                    "input": fingerprint,
+                                    "metadata": metadata,
+                                }
+                                state["render"]["started_at"] = now()
+                                store.save()
+                                stage_started = time.monotonic()
+                                try:
+                                    result = render(dict(record))
+                                    path = Path(result["path"]).resolve()
+                                    # Decode the whole image before declaring an artefact complete.
+                                    from PIL import Image
+
+                                    with Image.open(path) as image:
+                                        image.load()
+                                        if image.format != "JPEG":
+                                            raise ValueError(
+                                                "Final artefact must be a JPEG."
+                                            )
+                                    state["render"].update(
+                                        result,
+                                        path=str(path),
+                                        status="completed",
+                                        sha256=file_digest(path),
+                                        completed_at=now(),
+                                    )
+                                    outcomes["render"] = "completed"
+                                except InterruptedError:
+                                    state["render"]["status"] = outcomes["render"] = (
+                                        "cancelled"
+                                    )
+                                    stop_event.set()
+                                except Exception:
+                                    state["render"]["status"] = outcomes["render"] = (
+                                        "failed"
+                                    )
+                                state["render"]["duration_seconds"] = round(
+                                    time.monotonic() - stage_started, 3
+                                )
+                                store.save()
+                if phase in ("prompt", "all") and after_prompt is not None:
+                    try:
+                        after_prompt()
+                        summary["model_release"] = {"status": "completed"}
+                    except InterruptedError:
+                        stop_event.set()
+                        summary["model_release"] = {"status": "cancelled"}
+                    except Exception:
+                        handoff_failed = True
+                        summary["model_release"] = {"status": "failed"}
             if stage in ("all", "publish"):
                 if stop_event.is_set():
                     summary["publish"] = {"status": "cancelled"}
+                elif handoff_failed:
+                    summary["publish"] = {
+                        "status": "blocked",
+                        "reason": "model_release_failed",
+                    }
                 elif publish is None:
                     summary["publish"] = {"status": "skipped", "reason": "disabled"}
                 else:
@@ -261,6 +333,9 @@ def run_workflow(
                 if key != "quote_id"
             ]
             statuses += [summary.get("publish", {}).get("status", "skipped")]
+            statuses += [
+                summary[k]["status"] for k in ("fetch", "model_release") if k in summary
+            ]
             counts = Counter(statuses)
             summary["counts"] = dict(sorted(counts.items()))
             bad = any(counts.get(k) for k in ("failed", "unknown", "blocked"))
@@ -298,6 +373,8 @@ def run_workflow(
         summary.update(status="busy", exit_code=75)
     except KeyboardInterrupt:
         summary.update(status="cancelled", exit_code=130)
+    except InterruptedError:
+        summary.update(status="cancelled", exit_code=130)
     except Exception:
         summary.update(
             status="failed", exit_code=1, reason="configuration_or_persistence_failure"
@@ -320,11 +397,12 @@ def completed_render(receipt, fingerprint=None):
 
 
 class LivePrompt:
-    def __init__(self):
+    def __init__(self, release_ollama=False):
         self.runtime = None
         self.owned_instance = None
         self.model_lock = None
         self.ready = False
+        self.release_ollama = release_ollama
 
     def metadata(self):
         from quote_image_generator import get_prompt as gp
@@ -351,8 +429,15 @@ class LivePrompt:
             if s["provider"] == "ollama":
                 from quote_image_generator.ollama import OllamaClient
 
+                if self.release_ollama:
+                    self._acquire_model_lock("ollama", s["base_url"])
                 self.runtime = (
-                    OllamaClient(s["base_url"], s["context_length"], gp.stop_event),
+                    OllamaClient(
+                        s["base_url"],
+                        s["context_length"],
+                        gp.stop_event,
+                        release_on_close=self.release_ollama,
+                    ),
                     gp.create_tokenizer(),
                     None,
                 )
@@ -387,16 +472,7 @@ class LivePrompt:
         }
 
     def _start_lm_studio(self, gp, s):
-        from filelock import FileLock
-
-        lock_path = resolve_repo_path(
-            "output/locks/lm-" + digest(s["native_api_base_url"]) + ".lock"
-        )
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.model_lock is None:
-            self.model_lock = FileLock(lock_path, timeout=0)
-        if not self.model_lock.is_locked:
-            self.model_lock.acquire()
+        self._acquire_model_lock("lm", s["native_api_base_url"])
         instance = gp.ensure_lm_studio_model(
             native_api_base_url=s["native_api_base_url"],
             api_key=s["api_key"],
@@ -409,6 +485,18 @@ class LivePrompt:
             gp.create_tokenizer(),
             instance,
         )
+
+    def _acquire_model_lock(self, provider, endpoint):
+        from filelock import FileLock
+
+        lock_path = resolve_repo_path(
+            "output/locks/" + provider + "-" + digest(endpoint) + ".lock"
+        )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.model_lock is None:
+            self.model_lock = FileLock(lock_path, timeout=0)
+        if not self.model_lock.is_locked:
+            self.model_lock.acquire()
 
     def close(self):
         try:
@@ -426,6 +514,9 @@ class LivePrompt:
                         instance_id=self.owned_instance,
                     )
         finally:
+            self.runtime = None
+            self.owned_instance = None
+            self.ready = False
             if self.model_lock:
                 self.model_lock.release()
 
@@ -590,6 +681,16 @@ def main(argv=None):
         help="Run the fixed corpus without network or credentials.",
     )
     parser.add_argument("--output", type=Path, default=Path("output/demo"))
+    parser.add_argument(
+        "--mode",
+        choices=("batch", "per_quote"),
+        help="Override PIPELINE_MODE (default: batch).",
+    )
+    parser.add_argument(
+        "--skip-fetch",
+        action="store_true",
+        help="Use the saved quote corpus without refreshing Quotable.",
+    )
     args = parser.parse_args(argv)
     if args.publish and args.stage not in ("all", "publish"):
         parser.error("--publish requires --stage all or --stage publish.")
@@ -602,7 +703,8 @@ def main(argv=None):
         from quote_image_generator.offline import demo
 
         try:
-            result = demo(args.output)
+            mode = args.mode or get_env_str("PIPELINE_MODE", "batch")
+            result = demo(args.output, mode=mode)
         except RunBusy:
             result = {"status": "busy", "exit_code": 75}
         except Exception:
@@ -626,8 +728,14 @@ def main(argv=None):
 
         signal.signal(signal.SIGINT, cancel)
         signal.signal(signal.SIGTERM, cancel)
-        prompt_adapter = LivePrompt()
+        prompt_adapter = None
         try:
+            mode = args.mode or get_env_str("PIPELINE_MODE", "batch")
+            if mode not in ("batch", "per_quote"):
+                raise ValueError("PIPELINE_MODE must be batch or per_quote.")
+            prompt_adapter = LivePrompt(
+                release_ollama=mode == "batch" or args.stage == "prompt"
+            )
             corpus = resolve_repo_path(
                 get_env_str("QUOTES_FILE_PATH", "output/quotes.json")
             )
@@ -636,6 +744,17 @@ def main(argv=None):
                 LiveRender(stop) if args.stage in ("all", "render") else None
             )
             publisher = prepare = alert = None
+            fetch = None
+            if (
+                args.stage == "all"
+                and not args.skip_fetch
+                and get_env_bool("PIPELINE_FETCH_QUOTES", True)
+            ):
+                from quote_image_generator.get_quotes import retrieve_quotes
+
+                def fetch():
+                    return retrieve_quotes(stop_event=stop)
+
             if args.publish or args.stage == "publish":
                 from quote_image_generator.publisher import (
                     publish as publisher,
@@ -645,6 +764,9 @@ def main(argv=None):
             result = run_workflow(
                 corpus,
                 stage=args.stage,
+                mode=mode,
+                fetch=fetch,
+                after_prompt=prompt_adapter.close,
                 prompt=prompt_adapter,
                 render=render_adapter,
                 publish=publisher,
@@ -673,7 +795,8 @@ def main(argv=None):
             }
         finally:
             try:
-                prompt_adapter.close()
+                if prompt_adapter is not None:
+                    prompt_adapter.close()
             except Exception:
                 pass
     print(json.dumps(result, sort_keys=True))
