@@ -434,8 +434,11 @@ LM Studio calls already in progress keep their configured request timeout.
   - `python -m quote_image_generator.upload_quote_photo` (single-post path)
   - `python -m quote_image_generator.sort_json [quotes-file]`
 - Pipeline tests: `python -m pytest -q tests`.
-- Publishing submodule tests: `(cd upload_photo && python -m pytest -q tests)`.
-- Keep the suites in separate Python processes so their module roots do not collide.
+- Publishing submodule tests: install the submodule in its own virtual environment
+  using its locked dependencies and editable installation, then run
+  `python -m pytest -q tests` from `upload_photo`.
+- Keep the suites in separate virtual environments and Python processes so their
+  module roots do not collide.
 
 ## Governance
 
