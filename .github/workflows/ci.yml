@@ -52,7 +52,14 @@ jobs:
 
       - name: Run publishing submodule tests
         working-directory: upload_photo
-        run: python -m pytest -q tests
+        # Its standalone upload_photo module shares a name with the parent's
+        # vendored package, so installation tests need an isolated environment.
+        run: |
+          python -m venv "$RUNNER_TEMP/instagram-publisher-tests"
+          test_python="$RUNNER_TEMP/instagram-publisher-tests/bin/python"
+          "$test_python" -m pip install --require-hashes -r requirements-lock.txt
+          "$test_python" -m pip install --no-deps --no-build-isolation -e .
+          "$test_python" -m pytest -q tests
 
       - name: Run deterministic offline demo
         run: python -m quote_image_generator.pipeline --offline --output output/demo
