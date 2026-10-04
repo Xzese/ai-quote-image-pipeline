@@ -95,6 +95,7 @@ def run_workflow(
     prepare=None,
     alert=None,
     publication_dir=None,
+    auto_import_legacy=True,
 ):
     """Callbacks provide effects; this function owns persistence and eligibility.
 
@@ -162,6 +163,17 @@ def run_workflow(
             else:
                 records = validate_quote_records(
                     json.loads(Path(corpus).read_text(encoding="utf-8"))
+                )
+            if (
+                stage == "publish"
+                and publish is not None
+                and publication_dir is not None
+                and auto_import_legacy
+            ):
+                from quote_image_generator.legacy_import import import_legacy_images
+
+                summary["legacy_import"] = import_legacy_images(
+                    records, publication_dir, store, stop_event=stop_event
                 )
             summary["items"] = [{"quote_id": r["_id"]} for r in records]
             phases = (
@@ -778,6 +790,7 @@ def main(argv=None):
                 publication_dir=resolve_repo_path(
                     get_env_str("OVERLAY_OUTPUT_PATH", "output/images_text_overlay")
                 ),
+                auto_import_legacy=get_env_bool("LEGACY_IMAGE_AUTO_IMPORT", True),
                 resource_dirs=[
                     resolve_repo_path(
                         get_env_str("OUTPUT_IMAGE_PATH", "output/images")

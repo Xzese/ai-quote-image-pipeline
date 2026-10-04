@@ -116,9 +116,34 @@ remote delivery.
 ## Publication ownership and recovery
 
 Selection requires matching source, prompt and render receipts, a matching
-artefact hash, and a path beneath the configured final-image directory. Legacy
-files alone are not eligible. Run the prompt and render stages to create fresh
-receipts. Source or prompt edits invalidate dependent renders; model, template,
+artefact hash, and a path beneath the configured final-image directory. On the
+first publish-only run, valid legacy `1024x1024` RGB JPEGs are automatically
+adopted when filenames match quote IDs and saved prompts and hashtags exist.
+The importer decodes and hashes each file, preserves all existing receipts and
+publication claims, and records the original generation metadata as unknown.
+No images or quote records are modified. Imported receipts do not assert a
+known model, workflow or seed, so requesting prompt/render stages still uses
+the normal generation configuration and cache rules.
+
+Importing completes with one atomic state-file update under the workflow locks.
+A durable migration marker prevents repeated import after a caption, source or
+file edit. Existing failed/running/stale receipts are excluded. Skipped files
+remain ineligible and can be regenerated normally. A preview writes no receipts:
+
+```bash
+python -m quote_image_generator.legacy_import --dry-run
+python -m quote_image_generator.legacy_import
+```
+
+Run the importer in the same container/checkout that publishes, because receipt
+paths must match its image directory (for Compose, `/app/...`). It never calls
+Meta, the token provider, image generation services or SMTP. Set
+`LEGACY_IMAGE_AUTO_IMPORT=false` to require normal generation receipts instead.
+Automatic migration only runs with `--stage publish`, including the existing
+upload module. Keep a backup until the deployment is confirmed. Prior posts
+missing from the publication journal are not reconstructed during import.
+
+Source or prompt edits invalidate dependent renders; model, template,
 workflow, font or seed changes invalidate the affected stage's cache.
 Changing `LLM_PROVIDER`, its endpoint, model or context cap also invalidates prompts.
 

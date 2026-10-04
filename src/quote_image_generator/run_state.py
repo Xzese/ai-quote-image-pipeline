@@ -76,5 +76,9 @@ class StateStore:
         existing = self.data["items"].get(record["_id"])
         if not existing or existing.get("source") != fingerprint:
             existing = {"source": fingerprint}
+            if record["_id"] in self.data["items"]:
+                # Retain evidence of source edits even when receipts are invalidated.
+                # A legacy importer must not adopt the old quote's image later.
+                existing["legacy_import_blocked"] = True
             self.data["items"][record["_id"]] = existing
         return existing

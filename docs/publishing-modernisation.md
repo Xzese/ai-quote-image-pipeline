@@ -14,7 +14,13 @@ Graph API version against the Meta application. Token, object-storage and
 optional SMTP settings remain supported. The old `UPLOAD_QUOTE_MAX_ATTEMPTS`
 and `UPLOAD_QUOTE_RETRY_BASE_SECONDS` settings are obsolete.
 
-Only completed images with matching receipts are eligible. Existing images from
-older runs must be regenerated through the prompt/render stages. Inspect image
-quality before enabling publication, and retain the corpus state file between
-scheduler runs.
+Only completed images with matching receipts are eligible. The first
+publish-only run automatically imports matching legacy `1024x1024` RGB JPEGs,
+preserving their saved prompts/hashtags and recording file hashes with unknown
+original generation metadata. Set `LEGACY_IMAGE_AUTO_IMPORT=false` to opt out.
+Use `python -m quote_image_generator.legacy_import --dry-run` inside the
+publishing container to preview the one-time import. The standalone importer
+does not publish or contact external services. Existing receipts and publication
+claims are preserved; skipped files require normal regeneration. Inspect image
+quality before enabling publication, retain the state file between scheduler
+runs, and keep the backup until the migrated deployment is confirmed.
